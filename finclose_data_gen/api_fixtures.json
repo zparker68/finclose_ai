@@ -1,0 +1,22 @@
+{
+  "oracle_gl": {
+    "endpoint": "/api/oracle/gl",
+    "period": "2024-12",
+    "record_count": 220
+  },
+  "blackline": {
+    "endpoint": "/api/blackline/recons",
+    "period": "2024-12",
+    "record_count": 15
+  },
+  "oracle_ap": {
+    "endpoint": "/api/oracle/ap",
+    "period": "2024-12",
+    "record_count": 120
+  },
+  "oracle_ar": {
+    "endpoint": "/api/oracle/ar",
+    "period": "2024-12",
+    "record_count": 80
+  }
+}

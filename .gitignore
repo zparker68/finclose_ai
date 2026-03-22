@@ -1,0 +1,53 @@
+# FinClose AI — .gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Environment
+.env
+*.env.local
+
+# Data (regenerate with generate_mock_data.py — don't commit 168KB DB)
+finclose_data_gen/finclose.db
+finclose_data_gen/*.csv
+
+# Audit logs (contain session data)
+audit_log_*.json
+
+# Streamlit
+.streamlit/secrets.toml
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Ollama model cache (huge)
+*.gguf
+*.bin
+
+# Test artifacts
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Runtime-generated files
+monitoring/metrics.jsonl
+eval/results_*.json
+
+# Internal session/planning notes
+tasks/session_state.md
+CLAUDE.md

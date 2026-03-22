@@ -1,0 +1,34 @@
+# FinClose AI Agent — Python Dependencies
+# Tested on Python 3.12 | macOS (Apple Silicon) | Ubuntu 22.04
+
+# Core Agent Framework
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-community>=0.3.0
+langchain-ollama>=0.2.0      # Ollama local LLM bridge
+
+# Data Layer
+pandas>=2.0.0
+numpy>=1.26.0
+
+# Vector Store / RAG
+chromadb>=0.5.0              # local vector DB, no server needed
+sentence-transformers>=3.0.0 # all-MiniLM-L6-v2 for embeddings (~80MB)
+
+# API Layer (enterprise system simulation)
+fastapi>=0.115.0
+uvicorn>=0.30.0
+
+# UI
+streamlit>=1.38.0
+plotly>=5.24.0
+
+# Evaluation / Monitoring
+ragas>=0.1.0                 # faithfulness + answer relevancy metrics
+prometheus-client>=0.21.0    # model monitoring metrics
+
+# Utilities
+python-dotenv>=1.0.0
+pydantic>=2.9.0
+rich>=13.0.0                 # beautiful terminal output
+typer>=0.12.0                # CLI interface

@@ -1,0 +1,122 @@
+[
+  {
+    "query_id": "q_anomaly_01",
+    "task_type": "ANOMALY_DETECTION",
+    "query": "Scan all December 2024 journal entries for SOX control violations and suspicious patterns",
+    "period": "2024-12"
+  },
+  {
+    "query_id": "q_anomaly_02",
+    "task_type": "ANOMALY_DETECTION",
+    "query": "Identify any GL transactions posted without proper approval in December 2024",
+    "period": "2024-12"
+  },
+  {
+    "query_id": "q_anomaly_03",
+    "task_type": "ANOMALY_DETECTION",
+    "query": "Find all unbalanced journal entries in the December 2024 general ledger",
+    "period": "2024-12"
+  },
+  {
+    "query_id": "q_anomaly_04",
+    "task_type": "ANOMALY_DETECTION",
+    "query": "Check for any weekend or after-hours postings in December 2024 that violate control policies",
+    "period": "2024-12"
+  },
+  {
+    "query_id": "q_recon_01",
+    "task_type": "RECONCILIATION",
+    "query": "Review all open reconciliations for December 2024 and identify exceptions requiring escalation",
+    "period": "2024-12"
+  },
+  {
+    "query_id": "q_recon_02",
+    "task_type": "RECONCILIATION",
+    "query": "What is the status of cash account reconciliations for December 2024?",
+    "period": "2024-12"
+  },
+  {
+    "query_id": "q_recon_03",
+    "task_type": "RECONCILIATION",
+    "query": "How many reconciliation exceptions are unresolved for December close?",
+    "period": "2024-12"
+  },
+  {
+    "query_id": "q_recon_04",
+    "task_type": "RECONCILIATION",
+    "query": "List all Blackline reconciliations that are still in progress or have open items for December 2024",
+    "period": "2024-12"
+  },
+  {
+    "query_id": "q_variance_01",
+    "task_type": "VARIANCE_ANALYSIS",
+    "query": "Analyze December 2024 budget vs actual variances and write a CFO-ready narrative for accounts exceeding 10% threshold",
+    "period": "2024-12"
+  },
+  {
+    "query_id": "q_variance_02",
+    "task_type": "VARIANCE_ANALYSIS",
+    "query": "Which departments are over budget by more than 10% in December 2024?",
+    "period": "2024-12"
+  },
+  {
+    "query_id": "q_variance_03",
+    "task_type": "VARIANCE_ANALYSIS",
+    "query": "Provide a variance analysis summary showing all accounts with material budget deviations for December",
+    "period": "2024-12"
+  },
+  {
+    "query_id": "q_variance_04",
+    "task_type": "VARIANCE_ANALYSIS",
+    "query": "What are the top three budget overruns in December 2024 and what is the explanation?",
+    "period": "2024-12"
+  },
+  {
+    "query_id": "q_accrual_01",
+    "task_type": "ACCRUAL_REVIEW",
+    "query": "Validate the December 2024 accrual schedule for completeness and confirm all entries have reversal dates",
+    "period": "2024-12"
+  },
+  {
+    "query_id": "q_accrual_02",
+    "task_type": "ACCRUAL_REVIEW",
+    "query": "What is the total accrual exposure for December 2024 close?",
+    "period": "2024-12"
+  },
+  {
+    "query_id": "q_accrual_03",
+    "task_type": "ACCRUAL_REVIEW",
+    "query": "Which accruals in December 2024 are missing supporting documentation or have no reversal date?",
+    "period": "2024-12"
+  },
+  {
+    "query_id": "q_accrual_04",
+    "task_type": "ACCRUAL_REVIEW",
+    "query": "Review all pending accruals for December 2024 and identify any that are not yet posted",
+    "period": "2024-12"
+  },
+  {
+    "query_id": "q_je_01",
+    "task_type": "JOURNAL_ENTRY",
+    "query": "Generate a journal entry to accrue $285,000 of unpaid December salaries as of period end",
+    "period": "2024-12"
+  },
+  {
+    "query_id": "q_je_02",
+    "task_type": "JOURNAL_ENTRY",
+    "query": "Create a year-end accrual journal entry for $125,000 in unpaid professional services invoices",
+    "period": "2024-12"
+  },
+  {
+    "query_id": "q_je_03",
+    "task_type": "JOURNAL_ENTRY",
+    "query": "Prepare a reversing journal entry for the bonus accrual of $450,000 booked in December",
+    "period": "2024-12"
+  },
+  {
+    "query_id": "q_je_04",
+    "task_type": "JOURNAL_ENTRY",
+    "query": "Generate the correcting journal entry to reclassify $50,000 incorrectly posted to marketing instead of R&D",
+    "period": "2024-12"
+  }
+]

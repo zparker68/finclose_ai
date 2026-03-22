@@ -1,0 +1,244 @@
+{
+  "_meta": {
+    "description": "Ground truth for FinClose AI evaluation. Values derived from finclose.db known facts.",
+    "key_facts": {
+      "sox_anomalies_total": 11,
+      "anomaly_breakdown": {
+        "missing_approver": 5,
+        "self_approval": 2,
+        "unbalanced": 2,
+        "weekend_posting": 1,
+        "prior_period": 1
+      },
+      "open_recon_exceptions": 11,
+      "variance_threshold_breaches": 4,
+      "breach_accounts": [
+        "Professional Services (+19%)",
+        "IT Infrastructure (+17.3%)",
+        "Marketing (+14.7%)",
+        "Tax & Legal (+17.3%)"
+      ],
+      "total_accruals_usd": 14100000,
+      "accrual_entry_count": 14,
+      "period": "2024-12"
+    }
+  },
+
+  "q_anomaly_01": {
+    "required_verdicts": ["FLAGGED", "REJECTED"],
+    "min_sox_flags": 2,
+    "required_flag_types": ["MISSING_APPROVER", "UNBALANCED_ENTRY"],
+    "required_keywords": ["anomaly", "violation", "approval", "GL"],
+    "accuracy_checks": [
+      {"pattern": "11|eleven", "description": "Total anomaly count mentioned"},
+      {"pattern": "missing.*approv|approv.*missing", "description": "Missing approver finding"}
+    ],
+    "faithfulness_anchors": ["gl_transactions", "December 2024", "SOX"]
+  },
+
+  "q_anomaly_02": {
+    "required_verdicts": ["FLAGGED", "REJECTED"],
+    "min_sox_flags": 1,
+    "required_flag_types": ["MISSING_APPROVER"],
+    "required_keywords": ["approval", "missing", "GL"],
+    "accuracy_checks": [
+      {"pattern": "5|five", "description": "Count of missing-approver entries"}
+    ],
+    "faithfulness_anchors": ["gl_transactions", "approver", "December"]
+  },
+
+  "q_anomaly_03": {
+    "required_verdicts": ["FLAGGED", "REJECTED"],
+    "min_sox_flags": 1,
+    "required_flag_types": ["UNBALANCED_ENTRY"],
+    "required_keywords": ["unbalanced", "debit", "credit"],
+    "accuracy_checks": [
+      {"pattern": "2|two", "description": "Count of unbalanced entries"}
+    ],
+    "faithfulness_anchors": ["gl_transactions", "unbalanced", "debit", "credit"]
+  },
+
+  "q_anomaly_04": {
+    "required_verdicts": ["FLAGGED", "REJECTED"],
+    "min_sox_flags": 1,
+    "required_flag_types": ["WEEKEND_POSTING"],
+    "required_keywords": ["weekend", "posting", "control"],
+    "accuracy_checks": [
+      {"pattern": "1|one|weekend", "description": "Weekend posting identified"}
+    ],
+    "faithfulness_anchors": ["weekend", "Saturday", "Sunday", "policy"]
+  },
+
+  "q_recon_01": {
+    "required_verdicts": ["FLAGGED", "APPROVED"],
+    "min_sox_flags": 0,
+    "required_flag_types": [],
+    "required_keywords": ["reconciliation", "exception", "open"],
+    "accuracy_checks": [
+      {"pattern": "11|eleven", "description": "Open exception count"},
+      {"pattern": "15|fifteen", "description": "Total reconciliation count"}
+    ],
+    "faithfulness_anchors": ["reconciliation", "Blackline", "December 2024"]
+  },
+
+  "q_recon_02": {
+    "required_verdicts": ["FLAGGED", "APPROVED"],
+    "min_sox_flags": 0,
+    "required_flag_types": [],
+    "required_keywords": ["cash", "reconciliation", "status"],
+    "accuracy_checks": [],
+    "faithfulness_anchors": ["reconciliation", "cash", "December"]
+  },
+
+  "q_recon_03": {
+    "required_verdicts": ["FLAGGED", "APPROVED"],
+    "min_sox_flags": 0,
+    "required_flag_types": [],
+    "required_keywords": ["exception", "unresolved", "open"],
+    "accuracy_checks": [
+      {"pattern": "11|eleven", "description": "Open exception count"}
+    ],
+    "faithfulness_anchors": ["exception", "reconciliation", "December"]
+  },
+
+  "q_recon_04": {
+    "required_verdicts": ["FLAGGED", "APPROVED"],
+    "min_sox_flags": 0,
+    "required_flag_types": [],
+    "required_keywords": ["in progress", "open", "reconciliation", "Blackline"],
+    "accuracy_checks": [],
+    "faithfulness_anchors": ["reconciliation", "Blackline", "in_progress"]
+  },
+
+  "q_variance_01": {
+    "required_verdicts": ["FLAGGED", "APPROVED"],
+    "min_sox_flags": 0,
+    "required_flag_types": ["THRESHOLD_BREACH"],
+    "required_keywords": ["variance", "budget", "actual", "threshold"],
+    "accuracy_checks": [
+      {"pattern": "4|four", "description": "Number of accounts exceeding 10% threshold"},
+      {"pattern": "professional.?services|19%|19 percent", "description": "Top breach account"}
+    ],
+    "faithfulness_anchors": ["variance_analysis", "budget", "actual", "10%"]
+  },
+
+  "q_variance_02": {
+    "required_verdicts": ["FLAGGED", "APPROVED"],
+    "min_sox_flags": 0,
+    "required_flag_types": [],
+    "required_keywords": ["over budget", "department", "10%"],
+    "accuracy_checks": [
+      {"pattern": "4|four", "description": "Number of departments over 10%"},
+      {"pattern": "professional.?services|IT|marketing|tax", "description": "Named breach account"}
+    ],
+    "faithfulness_anchors": ["variance_analysis", "budget", "December"]
+  },
+
+  "q_variance_03": {
+    "required_verdicts": ["FLAGGED", "APPROVED"],
+    "min_sox_flags": 0,
+    "required_flag_types": [],
+    "required_keywords": ["variance", "material", "budget", "deviation"],
+    "accuracy_checks": [
+      {"pattern": "professional.?services|19%", "description": "Largest variance mentioned"}
+    ],
+    "faithfulness_anchors": ["variance_analysis", "budget", "actual"]
+  },
+
+  "q_variance_04": {
+    "required_verdicts": ["FLAGGED", "APPROVED"],
+    "min_sox_flags": 0,
+    "required_flag_types": [],
+    "required_keywords": ["overrun", "top", "budget"],
+    "accuracy_checks": [
+      {"pattern": "professional.?services|IT|marketing", "description": "Top overruns named"}
+    ],
+    "faithfulness_anchors": ["variance_analysis", "budget", "December 2024"]
+  },
+
+  "q_accrual_01": {
+    "required_verdicts": ["APPROVED", "FLAGGED"],
+    "min_sox_flags": 0,
+    "required_flag_types": [],
+    "required_keywords": ["accrual", "reversal", "schedule", "December"],
+    "accuracy_checks": [
+      {"pattern": "14|fourteen", "description": "Total accrual entry count"},
+      {"pattern": "14.1|14,1|14100000|\\$14", "description": "Total accrual amount ~$14.1M"}
+    ],
+    "faithfulness_anchors": ["accruals", "reversal_date", "December 2024"]
+  },
+
+  "q_accrual_02": {
+    "required_verdicts": ["APPROVED", "FLAGGED"],
+    "min_sox_flags": 0,
+    "required_flag_types": [],
+    "required_keywords": ["accrual", "total", "exposure"],
+    "accuracy_checks": [
+      {"pattern": "14.1|14,1|14100000|\\$14", "description": "Total accrual ~$14.1M"}
+    ],
+    "faithfulness_anchors": ["accruals", "amount", "December 2024"]
+  },
+
+  "q_accrual_03": {
+    "required_verdicts": ["APPROVED", "FLAGGED"],
+    "min_sox_flags": 0,
+    "required_flag_types": [],
+    "required_keywords": ["accrual", "missing", "support", "reversal"],
+    "accuracy_checks": [],
+    "faithfulness_anchors": ["accruals", "reversal_date", "December"]
+  },
+
+  "q_accrual_04": {
+    "required_verdicts": ["APPROVED", "FLAGGED"],
+    "min_sox_flags": 0,
+    "required_flag_types": [],
+    "required_keywords": ["pending", "accrual", "posted"],
+    "accuracy_checks": [],
+    "faithfulness_anchors": ["accruals", "status", "pending", "December"]
+  },
+
+  "q_je_01": {
+    "required_verdicts": ["APPROVED", "FLAGGED"],
+    "min_sox_flags": 0,
+    "required_flag_types": [],
+    "required_keywords": ["journal entry", "debit", "credit", "salary", "accrual"],
+    "accuracy_checks": [
+      {"pattern": "285,000|285000|\\$285", "description": "Correct dollar amount in JE"},
+      {"pattern": "salaries.?payable|accrued.?salaries|6[0-9]{3}", "description": "Correct account used"}
+    ],
+    "faithfulness_anchors": ["285,000", "December 2024", "salary", "accrual"]
+  },
+
+  "q_je_02": {
+    "required_verdicts": ["APPROVED", "FLAGGED"],
+    "min_sox_flags": 0,
+    "required_flag_types": [],
+    "required_keywords": ["journal entry", "debit", "credit", "professional services"],
+    "accuracy_checks": [
+      {"pattern": "125,000|125000|\\$125", "description": "Correct dollar amount in JE"}
+    ],
+    "faithfulness_anchors": ["125,000", "professional services", "accrual"]
+  },
+
+  "q_je_03": {
+    "required_verdicts": ["APPROVED", "FLAGGED"],
+    "min_sox_flags": 0,
+    "required_flag_types": [],
+    "required_keywords": ["reversing", "journal entry", "debit", "credit", "bonus"],
+    "accuracy_checks": [
+      {"pattern": "450,000|450000|\\$450", "description": "Correct dollar amount"}
+    ],
+    "faithfulness_anchors": ["450,000", "bonus", "reversal"]
+  },
+
+  "q_je_04": {
+    "required_verdicts": ["APPROVED", "FLAGGED"],
+    "min_sox_flags": 0,
+    "required_flag_types": [],
+    "required_keywords": ["reclassify", "correcting", "marketing", "R&D"],
+    "accuracy_checks": [
+      {"pattern": "50,000|50000|\\$50", "description": "Correct dollar amount"}
+    ],
+    "faithfulness_anchors": ["50,000", "marketing", "R&D", "reclassify"]
+  }
+}
