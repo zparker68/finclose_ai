@@ -29,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import time
 import uuid
 from datetime import datetime
@@ -44,10 +45,10 @@ from core import db_tools
 # Default: mistral (good balance of speed + reasoning on 8GB RAM)
 # Swap to: llama3.2, qwen2.5, or any GGUF you have pulled.
 
-OLLAMA_MODEL = os.environ.get("FINCLOSE_MODEL", "mistral")
-
 def _llm(temperature: float = 0.1) -> ChatOllama:
-    return ChatOllama(model=OLLAMA_MODEL, temperature=temperature)
+    # Read env var at call time so model switching from the UI takes effect immediately
+    model = os.environ.get("FINCLOSE_MODEL", "mistral")
+    return ChatOllama(model=model, temperature=temperature)
 
 
 def _hash_inputs(data: dict) -> str:
@@ -129,6 +130,11 @@ Classify and plan this accounting task."""
         # Strip markdown code fences if present
         if raw.startswith("```"):
             raw = "\n".join(raw.split("\n")[1:-1])
+
+        # Extract JSON object even if LLM added preamble text
+        json_match = re.search(r'\{.*\}', raw, re.DOTALL)
+        if json_match:
+            raw = json_match.group(0)
 
         plan = json.loads(raw)
 
@@ -425,6 +431,30 @@ def critic_agent(state: AgentState) -> AgentState:
     Issues APPROVED / FLAGGED / REJECTED verdict.
     """
     t0 = time.time()
+
+    # Short-circuit if Executor failed — don't fabricate a verdict on error text
+    if state.analysis_result.startswith("Executor error") or state.errors:
+        err_msg = state.errors[0] if state.errors else state.analysis_result
+        state.critic_verdict   = "REJECTED"
+        state.confidence_score = 0.0
+        state.sox_flags        = []
+        state.sox_flag_details = []
+        state.final_response   = (
+            f"PIPELINE ERROR\n\n"
+            f"The Executor agent could not complete analysis:\n{err_msg}\n\n"
+            f"Verify Ollama is running: ollama serve && ollama pull mistral"
+        )
+        state.audit_log.append(_audit(
+            agent=AgentRole.CRITIC.value,
+            action="sox_review",
+            inputs={"error": err_msg[:100]},
+            reasoning="Executor failed — REJECTED without LLM review",
+            output="Pipeline error — manual review required",
+            confidence=0.0,
+        ))
+        state.processing_ms += (time.time() - t0) * 1000
+        return state
+
     llm = _llm(temperature=0.0)  # Zero temperature — deterministic compliance review
 
     # Also run rule-based SOX checks on raw data (LLM-independent)
@@ -460,49 +490,51 @@ Review the analysis for accuracy, SOX compliance, and completeness."""
     issues      = _extract_field(review, "ISSUES",      "None identified")
     summary     = _extract_field(review, "SUMMARY",     "Review complete.")
 
-    state.critic_verdict    = verdict
-    state.confidence_score  = confidence
-    state.sox_flag_details  = [f.strip() for f in sox_raw.split(",") if f.strip() and f.strip() != "NONE"]
+    state.critic_verdict   = verdict
+    state.confidence_score = confidence
 
-    # Merge rule-based + LLM-detected SOX flags
-    all_sox_flags = list(set(
-        [f["flag"] for f in rule_based_flags] + state.sox_flag_details
-    ))
+    # Build a detail map: flag_name → description (rule-based have richer detail)
+    flag_detail_map: dict[str, str] = {}
+    for rb in rule_based_flags:
+        flag_detail_map[rb["flag"]] = rb["detail"]
+    for llm_flag in [f.strip() for f in sox_raw.split(",") if f.strip() and f.strip() != "NONE"]:
+        if llm_flag not in flag_detail_map:
+            flag_detail_map[llm_flag] = "Detected by compliance review"
+
+    # Build validated SoxFlag list and matching details in the same order
     state.sox_flags = []
-    for flag_str in all_sox_flags:
+    state.sox_flag_details = []
+    for flag_str, detail in flag_detail_map.items():
         try:
             state.sox_flags.append(SoxFlag(flag_str))
+            state.sox_flag_details.append(detail)
         except ValueError:
-            pass  # Unknown flag type — log but don't crash
+            pass  # Unknown flag type — skip
 
     # Build final response
     sox_block = ""
     if state.sox_flags:
         sox_block = f"\n\n⚠️  SOX FLAGS DETECTED: {', '.join(f.value for f in state.sox_flags)}"
 
-    state.final_response = f"""═══════════════════════════════════════════════════════
-FINCLOSE AI — {state.task_type.value.upper().replace('_', ' ')} REPORT
-Period: {state.period} | Session: {state.session_id}
-═══════════════════════════════════════════════════════
+    state.final_response = f"""### {state.task_type.value.upper().replace('_', ' ')} REPORT
+**Period:** {state.period}  |  **Session:** {state.session_id}  |  **Prepared by:** {state.requested_by}
 
 {state.analysis_result}
 
-───────────────────────────────────────────────────────
-CRITIC REVIEW
-───────────────────────────────────────────────────────
-Verdict:    {verdict}
-Confidence: {confidence:.0%}
-Issues:     {issues}{sox_block}
-Summary:    {summary}
+---
 
-───────────────────────────────────────────────────────
-DATA PROVENANCE (Audit Trail)
-───────────────────────────────────────────────────────
-{chr(10).join(f'  [{i+1}] {c}' for i, c in enumerate(state.citations))}
+### CRITIC REVIEW
 
-Processing time: {state.processing_ms + (time.time()-t0)*1000:.0f}ms
-Audit entries:   {len(state.audit_log) + 1}
-═══════════════════════════════════════════════════════"""
+**Verdict:** {verdict}
+**Confidence:** {confidence:.0%}
+**Issues:** {issues}{sox_block}
+**Summary:** {summary}
+
+---
+
+### DATA PROVENANCE
+
+{chr(10).join(f'  [{i+1}] {c}' for i, c in enumerate(state.citations))}"""
 
     state.audit_log.append(_audit(
         agent=AgentRole.CRITIC.value,

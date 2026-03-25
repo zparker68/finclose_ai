@@ -474,6 +474,14 @@ MODEL_OPTIONS = {
     "qwen2.5:7b":  "Qwen 2.5 7B (math)",
 }
 
+ROLE_OPTIONS = {
+    "controller":        "Controller",
+    "cfo":               "CFO",
+    "accounting_mgr":    "Accounting Manager",
+    "internal_audit":    "Internal Audit",
+    "external_auditor":  "External Auditor",
+}
+
 # ── Session state ─────────────────────────────────────────────────────────────
 
 def _init_session():
@@ -613,6 +621,7 @@ _CL = dict(
     paper_bgcolor=C_BG,
     plot_bgcolor=C_CARD,
     font=dict(family="IBM Plex Mono, Courier New, monospace", color=C_TEXT2, size=10),
+    height=270,
     margin=dict(l=10, r=10, t=36, b=10),
 )
 
@@ -827,9 +836,15 @@ def _confidence_gauge(score: float) -> go.Figure:
 def _render_analysis(text: str) -> str:
     lines = []
     for line in text.split("\n"):
+        # Replace box-drawing divider lines with a styled HR
+        if re.match(r'^[═─]{8,}$', line.strip()):
+            lines.append(f'<hr style="border:none;border-top:1px solid {C_BORDER2};margin:0.5rem 0;">')
+            continue
         if re.match(r"^#{1,3}\s+", line):
             heading = re.sub(r"^#{1,3}\s+", "", line).strip()
             lines.append(f"<h3>{heading}</h3>")
+        elif re.match(r"^---+$", line.strip()):
+            lines.append(f'<hr style="border:none;border-top:1px solid {C_BORDER2};margin:0.5rem 0;">')
         elif re.match(r"^[A-Z][A-Z\s]{3,}:\s*$", line.strip()):
             lines.append(f"<h3>{line.strip()}</h3>")
         else:
@@ -904,6 +919,129 @@ def _build_analysis_txt(result) -> str:
                 lines.append(f"  Action: {rem}")
     return "\n".join(lines)
 
+
+def _build_sox_report_html(result) -> str:
+    """Generate a clean SOX-ready HTML report suitable for CFO review."""
+    generated = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    verdict    = result.critic_verdict or "—"
+    conf_pct   = f"{result.confidence_score:.0%}"
+    verdict_color = {"APPROVED": "#2EAA5C", "FLAGGED": "#D9922A", "REJECTED": "#C94040"}.get(verdict, "#6B7A8D")
+
+    flag_rows = ""
+    for flag, detail in zip(result.sox_flags, result.sox_flag_details or []):
+        fv  = flag.value if hasattr(flag, "value") else str(flag)
+        rem = SOX_REMEDIATION.get(fv, "Review with controller.")
+        sev_color = "#C94040" if fv in ("SELF_APPROVAL", "UNBALANCED_ENTRY") else "#D9922A"
+        flag_rows += f"""
+        <tr>
+          <td style="color:{sev_color};font-weight:600;">{fv}</td>
+          <td>{detail}</td>
+          <td style="color:#6B7A8D;">{rem}</td>
+        </tr>"""
+
+    audit_rows = ""
+    for e in result.audit_log:
+        flags_str = ", ".join(e.sox_flags) if e.sox_flags else "—"
+        audit_rows += f"""
+        <tr>
+          <td style="color:#6B7A8D;white-space:nowrap;">{e.timestamp}</td>
+          <td style="font-weight:600;">{e.agent.upper()}</td>
+          <td>{e.action}</td>
+          <td style="color:{'#D9922A' if e.sox_flags else '#2EAA5C'};">{flags_str}</td>
+          <td>{e.confidence:.0%}</td>
+        </tr>"""
+
+    citations_html = "".join(
+        f'<li style="margin:0.2rem 0;color:#6B7A8D;">{c}</li>'
+        for c in result.citations
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>FinClose AI — SOX Compliance Report</title>
+<style>
+  body {{ font-family: 'IBM Plex Mono', 'Courier New', monospace; background:#0F1923; color:#D4D8E2;
+         margin:0; padding:2rem; font-size:13px; }}
+  h1   {{ color:#C9A84C; font-size:1.3rem; letter-spacing:0.08em; border-bottom:1px solid #1E2D3D;
+         padding-bottom:0.5rem; margin-bottom:0.3rem; }}
+  h2   {{ color:#C9A84C; font-size:0.85rem; text-transform:uppercase; letter-spacing:0.12em;
+         margin:1.5rem 0 0.5rem; border-bottom:1px solid #1E2D3D; padding-bottom:0.25rem; }}
+  .meta {{ color:#6B7A8D; font-size:0.75rem; margin-bottom:1.5rem; }}
+  .verdict-badge {{ display:inline-block; padding:0.3rem 1rem; border-radius:4px;
+                   font-weight:700; font-size:1rem; letter-spacing:0.1em;
+                   background:{verdict_color}22; color:{verdict_color};
+                   border:1px solid {verdict_color}; }}
+  .kpi-grid {{ display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; margin:1rem 0; }}
+  .kpi      {{ background:#162030; border:1px solid #1E2D3D; border-left:3px solid #C9A84C;
+              border-radius:4px; padding:0.75rem 1rem; }}
+  .kpi-val  {{ font-size:1.4rem; font-weight:700; color:#C9A84C; }}
+  .kpi-lbl  {{ font-size:0.65rem; text-transform:uppercase; letter-spacing:0.1em; color:#6B7A8D; }}
+  table     {{ width:100%; border-collapse:collapse; font-size:0.8rem; }}
+  th        {{ text-align:left; color:#6B7A8D; font-size:0.65rem; text-transform:uppercase;
+              letter-spacing:0.1em; padding:0.4rem 0.6rem; border-bottom:1px solid #1E2D3D; }}
+  td        {{ padding:0.4rem 0.6rem; border-bottom:1px solid #0F1923; vertical-align:top; }}
+  tr:hover  {{ background:#162030; }}
+  pre       {{ background:#162030; border:1px solid #1E2D3D; border-radius:4px;
+              padding:1rem; white-space:pre-wrap; word-break:break-word; font-size:0.78rem;
+              color:#D4D8E2; line-height:1.6; }}
+  ul        {{ margin:0; padding-left:1.2rem; }}
+  .cert     {{ background:#162030; border:1px solid #C9A84C33; border-radius:4px;
+              padding:1rem; margin-top:1.5rem; color:#6B7A8D; font-size:0.75rem; }}
+</style>
+</head>
+<body>
+
+<h1>⬡ FINCLOSE AI — SOX Compliance Report</h1>
+<div class="meta">
+  Session: {result.session_id} &nbsp;·&nbsp; Period: {result.period}
+  &nbsp;·&nbsp; Prepared by: {result.requested_by}
+  &nbsp;·&nbsp; Generated: {generated}
+</div>
+
+<h2>Executive Summary</h2>
+<div class="kpi-grid">
+  <div class="kpi"><div class="kpi-lbl">Verdict</div>
+    <div class="verdict-badge">{verdict}</div></div>
+  <div class="kpi"><div class="kpi-lbl">Confidence</div>
+    <div class="kpi-val">{conf_pct}</div></div>
+  <div class="kpi"><div class="kpi-lbl">SOX Flags</div>
+    <div class="kpi-val" style="color:{'#C94040' if result.sox_flags else '#2EAA5C'};">{len(result.sox_flags)}</div></div>
+</div>
+
+<h2>Query</h2>
+<pre>{result.user_query}</pre>
+
+<h2>Analysis</h2>
+<pre>{result.final_response}</pre>
+
+{'<h2>SOX Control Findings</h2><table><thead><tr><th>Flag</th><th>Detail</th><th>Required Action</th></tr></thead><tbody>' + flag_rows + '</tbody></table>' if result.sox_flags else '<p style="color:#2EAA5C;">✓ No SOX control violations detected.</p>'}
+
+<h2>Data Provenance</h2>
+<ul>{citations_html}</ul>
+
+<h2>Audit Trail — {len(result.audit_log)} Entries</h2>
+<table>
+  <thead><tr><th>Timestamp</th><th>Agent</th><th>Action</th><th>SOX Flags</th><th>Confidence</th></tr></thead>
+  <tbody>{audit_rows}</tbody>
+</table>
+
+<div class="cert">
+  <strong style="color:#C9A84C;">SOX Certification Statement</strong><br><br>
+  This report was generated by FinClose AI, a multi-agent accounting automation system operating on-premises
+  with zero data egress. All analysis is grounded in data retrieved from Oracle Fusion GL and Blackline
+  reconciliation systems. Input hashes (SHA-256) are recorded for each data source to satisfy SOX Section
+  302/404 tamper-detection requirements. This report does not constitute a final audit opinion and must be
+  reviewed by a qualified Controller or CFO before period close.
+  <br><br>
+  <span style="color:#3D4F63;">Session hash: {result.session_id} &nbsp;·&nbsp; Exported: {generated}</span>
+</div>
+
+</body>
+</html>"""
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
 # ══════════════════════════════════════════════════════════════════════════════
@@ -921,7 +1059,8 @@ with st.sidebar:
     period    = st.selectbox("Period", PERIOD_OPTIONS, index=0)
     model_key = st.selectbox("Model", list(MODEL_OPTIONS.keys()),
                              format_func=lambda k: MODEL_OPTIONS[k])
-    analyst   = st.text_input("Requested By", value="analyst")
+    analyst   = st.selectbox("Requested By", list(ROLE_OPTIONS.keys()),
+                             format_func=lambda k: ROLE_OPTIONS[k])
 
     st.markdown(f'<hr style="border-color:{C_BORDER};margin:0.75rem 0 0.5rem;">', unsafe_allow_html=True)
     st.markdown('<div class="section-label">Quick Launch</div>', unsafe_allow_html=True)
@@ -929,6 +1068,7 @@ with st.sidebar:
     for label, query in DEMO_QUERIES.items():
         if st.button(label, key=f"ql_{label}", use_container_width=True):
             st.session_state["selected_query"] = query
+            st.session_state["task_input"] = query  # sync text area widget state
 
     st.markdown(f'<hr style="border-color:{C_BORDER};margin:0.75rem 0 0.5rem;">', unsafe_allow_html=True)
 
@@ -973,6 +1113,12 @@ if not ollama_ok:
 
 # ── KPI strip ─────────────────────────────────────────────────────────────────
 kpi = _kpi_data(period)
+
+if kpi["gl_entries"] == 0 and kpi["accrual_exposure"] == 0:
+    st.info(
+        f"No close data available for period **{period}**. "
+        "The demo dataset covers **December 2024 (2024-12)**."
+    )
 
 gl_val       = f"{kpi['gl_entries']:,}" if isinstance(kpi['gl_entries'], int) else "—"
 acc_val      = _compact(kpi['accrual_exposure']) if isinstance(kpi['accrual_exposure'], (int, float)) else "—"
@@ -1237,8 +1383,16 @@ n_entries     = len(audit_entries)
 
 # Export buttons (only shown post-run)
 if result:
-    exp_col1, exp_col2, _ = st.columns([1, 1, 4])
+    exp_col1, exp_col2, exp_col3, _ = st.columns([1, 1, 1, 2])
     with exp_col1:
+        st.download_button(
+            label="⬡ SOX Report",
+            data=_build_sox_report_html(result),
+            file_name=f"finclose_sox_report_{result.session_id}_{period}.html",
+            mime="text/html",
+            use_container_width=True,
+        )
+    with exp_col2:
         st.download_button(
             label="Export Audit Log",
             data=_build_audit_json(result),
@@ -1246,7 +1400,7 @@ if result:
             mime="application/json",
             use_container_width=True,
         )
-    with exp_col2:
+    with exp_col3:
         st.download_button(
             label="Export Analysis",
             data=_build_analysis_txt(result),
