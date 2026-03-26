@@ -42,9 +42,11 @@ from core.db_tools import (
     get_accruals,
     get_anomalous_entries,
     get_ar_aging,
+    get_gl_by_anomaly_type,
     get_gl_transactions,
     get_reconciliations,
     get_trial_balance,
+    get_unbalanced_entries,
     get_variance_analysis,
 )
 
@@ -86,6 +88,29 @@ SOX_REMEDIATION: dict[str, str] = {
     "ROUND_NUMBER_MANUAL":  "Provide supporting documentation for manual round-number entry.",
     "THRESHOLD_BREACH":     "Prepare variance explanation memo. CFO sign-off required before close.",
     "UNUSUAL_ACCOUNT_COMBO":"Verify account coding with GL accountant. Flag for internal audit.",
+}
+
+# Maps SoxFlag values to their Oracle GL anomaly_type field for drill-down lookups
+FLAG_TO_ANOMALY_TYPE: dict[str, str] = {
+    "SELF_APPROVAL":        "self_approved",
+    "MISSING_APPROVER":     "missing_approver",
+    "UNBALANCED_ENTRY":     "unbalanced_entry",
+    "WEEKEND_POSTING":      "weekend_posting",
+    "PRIOR_PERIOD_POSTING": "prior_period_posting",
+    "ROUND_NUMBER_MANUAL":  "round_number_manual",
+    "UNUSUAL_ACCOUNT_COMBO":"unusual_account_combo",
+}
+
+# Severity tier for colour-coding: 1=critical(red), 2=high(amber), 3=info(gold/blue)
+FLAG_SEVERITY: dict[str, int] = {
+    "SELF_APPROVAL":        1,
+    "UNBALANCED_ENTRY":     1,
+    "MISSING_APPROVER":     2,
+    "THRESHOLD_BREACH":     2,
+    "WEEKEND_POSTING":      3,
+    "ROUND_NUMBER_MANUAL":  3,
+    "PRIOR_PERIOD_POSTING": 3,
+    "UNUSUAL_ACCOUNT_COMBO":3,
 }
 
 # ── Theme CSS ─────────────────────────────────────────────────────────────────
@@ -556,6 +581,16 @@ def _fetch_anomalies(period): return get_anomalous_entries(period)
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _fetch_ar(period):        return get_ar_aging(period)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_gl_by_anomaly_type(period, anomaly_type):
+    return get_gl_by_anomaly_type(period, anomaly_type)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_unbalanced(period): return get_unbalanced_entries(period)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_variance_breaches(period): return get_variance_analysis(period, threshold_only=True)
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _fetch_tb(period):        return get_trial_balance(period)
@@ -1311,35 +1346,121 @@ with col_sox:
     st.markdown('<div class="panel-title">SOX Flags</div>', unsafe_allow_html=True)
 
     if result and result.sox_flags:
-        sox_rows = []
+        sev_color = {1: C_RED, 2: C_AMBER, 3: C_GOLD}
+
         for flag, detail in zip(result.sox_flags, result.sox_flag_details or []):
-            fv = flag.value if hasattr(flag, "value") else str(flag)
-            sox_rows.append({
-                "Flag":      fv,
-                "Detail":    detail,
-                "Action Required": SOX_REMEDIATION.get(fv, "Review with controller."),
-            })
-        sox_df = pd.DataFrame(sox_rows)
+            fv      = flag.value if hasattr(flag, "value") else str(flag)
+            tier    = FLAG_SEVERITY.get(fv, 3)
+            color   = sev_color.get(tier, C_GOLD)
+            icon    = "▲" if tier == 1 else ("●" if tier == 2 else "○")
+            action  = SOX_REMEDIATION.get(fv, "Review with controller.")
 
-        sev = {
-            "SELF_APPROVAL":        f"color:{C_RED}",
-            "UNBALANCED_ENTRY":     f"color:{C_RED}",
-            "MISSING_APPROVER":     f"color:{C_AMBER}",
-            "THRESHOLD_BREACH":     f"color:{C_AMBER}",
-            "WEEKEND_POSTING":      f"color:{C_GOLD}",
-            "ROUND_NUMBER_MANUAL":  f"color:{C_GOLD}",
-            "PRIOR_PERIOD_POSTING": f"color:{C_BLUE}",
-            "UNUSUAL_ACCOUNT_COMBO":f"color:{C_BLUE}",
-        }
-        def _color_sox(row):
-            s = sev.get(row["Flag"], f"color:{C_TEXT}")
-            return [s, f"color:{C_TEXT2}", f"color:{C_TEXT3}"]
+            with st.expander(f"{icon} {fv}", expanded=(tier == 1)):
+                st.markdown(
+                    f'<div style="color:{C_TEXT2};font-size:0.72rem;margin-bottom:0.4rem;">'
+                    f'{detail}</div>',
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    f'<div style="color:{color};font-size:0.68rem;font-weight:600;'
+                    f'text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.6rem;">'
+                    f'Required Action</div>'
+                    f'<div style="color:{C_TEXT2};font-size:0.72rem;margin-bottom:0.75rem;">'
+                    f'{action}</div>',
+                    unsafe_allow_html=True,
+                )
 
-        st.dataframe(
-            sox_df.style.apply(_color_sox, axis=1),
-            use_container_width=True, hide_index=True,
-            height=min(260, 50 + 35 * len(sox_df)),
-        )
+                # ── Source drill-down ─────────────────────────────────────
+                anomaly_type = FLAG_TO_ANOMALY_TYPE.get(fv)
+
+                if fv == "THRESHOLD_BREACH":
+                    breaches = _fetch_variance_breaches(result.period)
+                    recs = breaches.get("records", [])
+                    if recs:
+                        df_b = pd.DataFrame(recs)[
+                            ["account_name", "budget_amount", "actual_amount",
+                             "vs_budget_pct", "favorable_unfavorable"]
+                        ].rename(columns={
+                            "account_name":       "Account",
+                            "budget_amount":      "Budget",
+                            "actual_amount":      "Actual",
+                            "vs_budget_pct":      "Var %",
+                            "favorable_unfavorable": "F/U",
+                        })
+                        df_b["Budget"] = df_b["Budget"].apply(_compact)
+                        df_b["Actual"] = df_b["Actual"].apply(_compact)
+                        df_b["Var %"]  = df_b["Var %"].apply(lambda x: f"{x:.1f}%")
+                        st.markdown(
+                            f'<div style="color:{C_TEXT3};font-size:0.65rem;'
+                            f'text-transform:uppercase;letter-spacing:0.08em;'
+                            f'margin-bottom:0.25rem;">Oracle/HFM — Threshold Breaches</div>',
+                            unsafe_allow_html=True,
+                        )
+                        st.dataframe(df_b, use_container_width=True,
+                                     hide_index=True, height=min(200, 40 + 35 * len(df_b)))
+
+                elif fv == "UNBALANCED_ENTRY":
+                    unbal = _fetch_unbalanced(result.period)
+                    recs  = unbal.get("records", [])
+                    if recs:
+                        df_u = pd.DataFrame(recs).rename(columns={
+                            "je_id":         "JE-ID",
+                            "total_debits":  "Debits",
+                            "total_credits": "Credits",
+                            "imbalance":     "Imbalance",
+                        })
+                        df_u["Debits"]    = df_u["Debits"].apply(_compact)
+                        df_u["Credits"]   = df_u["Credits"].apply(_compact)
+                        df_u["Imbalance"] = df_u["Imbalance"].apply(lambda x: f"${x:,.2f}")
+                        st.markdown(
+                            f'<div style="color:{C_TEXT3};font-size:0.65rem;'
+                            f'text-transform:uppercase;letter-spacing:0.08em;'
+                            f'margin-bottom:0.25rem;">Oracle GL — Unbalanced Entries</div>',
+                            unsafe_allow_html=True,
+                        )
+                        st.dataframe(df_u, use_container_width=True,
+                                     hide_index=True, height=min(160, 40 + 35 * len(df_u)))
+
+                elif anomaly_type:
+                    gl = _fetch_gl_by_anomaly_type(result.period, anomaly_type)
+                    recs = gl.get("records", [])
+                    if recs:
+                        df_gl = pd.DataFrame(recs)[[
+                            "je_id", "txn_date", "account_code", "account_name",
+                            "debit", "credit", "created_by", "approved_by", "description"
+                        ]].rename(columns={
+                            "je_id":        "JE-ID",
+                            "txn_date":     "Date",
+                            "account_code": "Acct",
+                            "account_name": "Account",
+                            "debit":        "Debit",
+                            "credit":       "Credit",
+                            "created_by":   "Prepared",
+                            "approved_by":  "Approved",
+                            "description":  "Description",
+                        })
+                        df_gl["Debit"]  = df_gl["Debit"].apply(
+                            lambda x: _compact(x) if x else "—")
+                        df_gl["Credit"] = df_gl["Credit"].apply(
+                            lambda x: _compact(x) if x else "—")
+                        df_gl["Description"] = df_gl["Description"].str[:30]
+                        st.markdown(
+                            f'<div style="color:{C_TEXT3};font-size:0.65rem;'
+                            f'text-transform:uppercase;letter-spacing:0.08em;'
+                            f'margin-bottom:0.25rem;">'
+                            f'Oracle GL — {len(recs)} source record(s) · '
+                            f'hash:{gl["data_hash"]}</div>',
+                            unsafe_allow_html=True,
+                        )
+                        st.dataframe(df_gl, use_container_width=True,
+                                     hide_index=True, height=min(220, 40 + 35 * len(df_gl)))
+                    else:
+                        st.markdown(
+                            f'<div style="color:{C_TEXT3};font-size:0.72rem;">'
+                            f'No source records found for this period.</div>',
+                            unsafe_allow_html=True,
+                        )
+
     elif result:
         st.markdown(
             f'<div style="color:{C_GREEN};font-size:0.82rem;margin-top:0.4rem;">'

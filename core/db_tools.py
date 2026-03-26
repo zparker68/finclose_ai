@@ -98,6 +98,33 @@ def get_anomalous_entries(period: str) -> dict:
     }
 
 
+def get_gl_by_anomaly_type(period: str, anomaly_type: str) -> dict:
+    """
+    Returns all GL entries of a specific anomaly type for drill-down traceability.
+    Used by the UI to show the exact source records behind each SOX flag.
+    """
+    with _conn() as conn:
+        rows = conn.execute(
+            """SELECT je_id, txn_date, account_code, account_name,
+                      debit, credit, description, entry_type,
+                      created_by, approved_by, legal_entity_name,
+                      cost_center_name, anomaly_type
+               FROM gl_transactions
+               WHERE period=? AND anomaly_type=?
+               ORDER BY txn_date""",
+            (period, anomaly_type)
+        ).fetchall()
+        data = _rows_to_dicts(rows)
+    return {
+        "source": "Oracle Fusion GL",
+        "period": period,
+        "anomaly_type": anomaly_type,
+        "record_count": len(data),
+        "data_hash": _hash(data),
+        "records": data,
+    }
+
+
 def get_unbalanced_entries(period: str) -> dict:
     """
     Calculates net debit-credit by JE ID — any non-zero net is an imbalance.
