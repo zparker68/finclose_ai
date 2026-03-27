@@ -32,7 +32,7 @@ FinClose AI is an end-to-end multi-agent system that automates the most labour-i
 
 **The system runs 100% offline.** No financial data ever leaves your machine — a critical requirement in regulated industries (gaming, healthcare, financial services) where sensitive GL data cannot be transmitted to third-party cloud LLM APIs.
 
-This is not a demo. It is a functioning accounting automation engine backed by realistic enterprise data, a full audit trail, and SOX-aware control checks.
+This is not a demo. It is a functioning accounting automation engine backed by realistic enterprise data, a full audit trail, SOX-aware control checks, and a deterministic numeric claim verifier that catches LLM hallucinations before they reach the compliance gate.
 
 ---
 
@@ -52,7 +52,6 @@ This is not a demo. It is a functioning accounting automation engine backed by r
   │   │ Entries     │  │  Recs        │  │  Listing     │  │  Report     │ │
   │   │ 220 rows    │  │  15 recs     │  │  120 inv.    │  │  80 recs    │ │
   │   └──────┬──────┘  └──────┬───────┘  └──────┬───────┘  └──────┬──────┘ │
-  │          │                │                  │                  │        │
   │          └────────────────┴──────────────────┴──────────────────┘        │
   │                                    │                                     │
   │                           ┌────────▼────────┐                           │
@@ -66,40 +65,42 @@ This is not a demo. It is a functioning accounting automation engine backed by r
   │                                    ▼                                    │
   │   ╔═══════════════╗     ╔══════════════════╗                           │
   │   ║  USER QUERY   ║────▶║  1. PLANNER      ║                           │
-  │   ╚═══════════════╝     ║                  ║                           │
-  │                         ║  • Classify task ║                           │
-  │                         ║  • Write plan    ║                           │
-  │                         ║  • Select tools  ║                           │
+  │   ╚═══════════════╝     ║  Classify task   ║                           │
+  │                         ║  Write plan      ║                           │
+  │                         ║  Select tools    ║                           │
   │                         ╚════════╤═════════╝                           │
-  │                                  │                                      │
   │                                  ▼                                      │
   │                         ╔══════════════════╗     ┌──────────────────┐  │
   │                         ║  2. RETRIEVER    ║────▶│  Policy Library  │  │
-  │                         ║                  ║     │  (RAG context)   │  │
-  │                         ║  • Pull DB data  ║     │  5 GAAP/SOX docs │  │
-  │                         ║  • Load policies ║     └──────────────────┘  │
-  │                         ║  • Hash inputs   ║                           │
+  │                         ║  Pull DB data    ║     │  (RAG context)   │  │
+  │                         ║  Load policies   ║     │  5 GAAP/SOX docs │  │
+  │                         ║  Hash inputs     ║     └──────────────────┘  │
   │                         ╚════════╤═════════╝                           │
-  │                                  │                                      │
   │                                  ▼                                      │
   │                         ╔══════════════════╗     ┌──────────────────┐  │
   │                         ║  3. EXECUTOR     ║────▶│  Ollama (Local)  │  │
-  │                         ║                  ║     │  Mistral 7B Q4   │  │
-  │                         ║  • Reconcile     ║     │  ~4.5GB RAM      │  │
-  │                         ║  • Generate JEs  ║     │  CPU inference   │  │
-  │                         ║  • Variance calc ║     └──────────────────┘  │
-  │                         ║  • Write narrative║                          │
+  │                         ║  Reconcile       ║     │  Mistral 7B Q4   │  │
+  │                         ║  Generate JEs    ║     │  ~4.5GB RAM      │  │
+  │                         ║  Variance calc   ║     └──────────────────┘  │
+  │                         ║  Write narrative ║                           │
   │                         ╚════════╤═════════╝                           │
   │                                  │                                      │
+  │                         ┌────────▼────────────────────────────────┐    │
+  │                         │  NUMERIC CLAIM VERIFIER  (deterministic) │    │
+  │                         │  Extracts dollar amounts from Executor   │    │
+  │                         │  output and cross-checks every value     │    │
+  │                         │  against retrieved_data before the LLM   │    │
+  │                         │  Critic sees the analysis.               │    │
+  │                         │  Verified ✓ · Suspicious ● · Mismatch ⚠ │    │
+  │                         └────────┬────────────────────────────────┘    │
   │                                  ▼                                      │
   │                         ╔══════════════════╗                           │
   │                         ║  4. CRITIC       ║  ← SOX Gate               │
-  │                         ║                  ║                           │
-  │                         ║  • SOX checks    ║                           │
-  │                         ║  • Math verify   ║                           │
-  │                         ║  • Confidence    ║                           │
-  │                         ║  • APPROVE/FLAG/ ║                           │
-  │                         ║    REJECT        ║                           │
+  │                         ║  Rule-based SOX  ║                           │
+  │                         ║  5-dim confidence║                           │
+  │                         ║  Math verify     ║                           │
+  │                         ║  APPROVE/FLAG/   ║                           │
+  │                         ║  REJECT          ║                           │
   │                         ╚════════╤═════════╝                           │
   └──────────────────────────────────│────────────────────────────────────┘
                                      │
@@ -107,12 +108,10 @@ This is not a demo. It is a functioning accounting automation engine backed by r
   │  OUTPUT LAYER                    ▼                                    │
   │                                                                        │
   │   ┌──────────────────┐  ┌─────────────────┐  ┌─────────────────────┐ │
-  │   │  Formatted       │  │  SOX Audit Log  │  │  Streamlit UI       │ │
-  │   │  Analysis Report │  │  (JSON export)  │  │  Dashboard          │ │
-  │   │                  │  │                 │  │                     │ │
-  │   │  APPROVED ✅     │  │  Timestamped    │  │  "Run Close" btn    │ │
-  │   │  FLAGGED  ⚠️     │  │  Input hashes   │  │  Plotly charts      │ │
-  │   │  REJECTED ❌     │  │  Attribution    │  │  Audit trail view   │ │
+  │   │  Analysis Report │  │  SOX Audit Log  │  │  Streamlit UI       │ │
+  │   │  APPROVED ✅     │  │  JSON export    │  │  Confidence bars    │ │
+  │   │  FLAGGED  ⚠️     │  │  SHA-256 hashes │  │  Drill-down cards   │ │
+  │   │  REJECTED ❌     │  │  Attribution    │  │  Plotly charts      │ │
   │   └──────────────────┘  └─────────────────┘  └─────────────────────┘ │
   └────────────────────────────────────────────────────────────────────────┘
 ```
@@ -144,13 +143,139 @@ This is not a demo. It is a functioning accounting automation engine backed by r
 │                │  Model role: Senior accountant + analyst                  │
 ├────────────────┼────────────────────────────────────────────────────────────┤
 │  CRITIC        │  Independent SOX compliance review. Runs deterministic    │
-│                │  rule-based checks first (no LLM). Then uses LLM to       │
-│                │  verify math, completeness, and policy alignment. Issues   │
-│                │  APPROVED / FLAGGED / REJECTED verdict with confidence     │
-│                │  score. Never trusts — always verifies independently.      │
+│                │  rule-based checks AND numeric claim verification before   │
+│                │  any LLM review. Emits a 5-dimension confidence breakdown  │
+│                │  (not a single scalar) so reviewers understand exactly     │
+│                │  what the system is and isn't certain about.              │
+│                │  Issues APPROVED / FLAGGED / REJECTED verdict.            │
 │                │  Model role: Internal audit + SOX reviewer                │
 └────────────────┴────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## Confidence Scoring — 5-Dimension Breakdown
+
+A single LLM confidence scalar is insufficient in a regulated environment: a manager who sees "75% confident" with a SOX flag has no idea *why* the system is uncertain. FinClose AI replaces the scalar with five deterministic dimensions, four of which run entirely without the LLM.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     CONFIDENCE BREAKDOWN — WEIGHTS                          │
+├──────────────────────────┬────────┬────────────────────────────────────────┤
+│  Dimension               │ Weight │  How it's computed                     │
+├──────────────────────────┼────────┼────────────────────────────────────────┤
+│  Data Completeness       │  25%   │  Fraction of expected data sources     │
+│                          │        │  (GL, AP, recs…) that returned records │
+│                          │        │  for the task type. Deterministic.     │
+├──────────────────────────┼────────┼────────────────────────────────────────┤
+│  Policy Alignment        │  15%   │  Number of accounting policy documents │
+│                          │        │  retrieved for RAG grounding.          │
+│                          │        │  2+ docs = 100%. Deterministic.        │
+├──────────────────────────┼────────┼────────────────────────────────────────┤
+│  Arithmetic Integrity    │  30%   │  Penalises unbalanced JEs (-25% each)  │
+│                          │        │  AND numeric claim mismatches from the │
+│                          │        │  verifier (-50% × mismatch rate).      │
+│                          │        │  Deterministic. Highest weight.        │
+├──────────────────────────┼────────┼────────────────────────────────────────┤
+│  Anomaly Coverage        │  20%   │  Fraction of rule-based SOX flags      │
+│                          │        │  whose JE-IDs appear in the Executor's │
+│                          │        │  analysis. Deterministic.              │
+├──────────────────────────┼────────┼────────────────────────────────────────┤
+│  AI Coherence            │  10%   │  The LLM Critic's own confidence claim.│
+│                          │        │  Deliberately downweighted — a         │
+│                          │        │  confidently hallucinating Executor    │
+│                          │        │  can fool the Critic LLM but cannot    │
+│                          │        │  move the composite score significantly.│
+└──────────────────────────┴────────┴────────────────────────────────────────┘
+
+  Composite = Σ(dimension × weight)
+
+  Example: FLAGGED run with 2 unbalanced JEs, 1 missing data source,
+           1 SOX flag not addressed in analysis:
+    Data Completeness    50%  × 0.25 = 0.125
+    Policy Alignment    100%  × 0.15 = 0.150
+    Arithmetic Integrity 50%  × 0.30 = 0.150  ← 2 unbalanced JEs
+    Anomaly Coverage     67%  × 0.20 = 0.134
+    AI Coherence         95%  × 0.10 = 0.095
+    ─────────────────────────────────────────
+    Composite confidence:              65%     (Manual review band)
+```
+
+The breakdown bars are displayed in the Verdict panel of the Streamlit UI, showing each dimension independently so a director can see "Math Verified: 50%" and immediately understand there are arithmetic integrity issues — without needing to interpret a black-box percentage.
+
+---
+
+## Numeric Claim Verifier
+
+The LLM Critic reviewing the LLM Executor's output is a "second opinion from someone who read the same book" — if the Executor hallucinates a confident number, the Critic may not catch it because both models share the same training biases.
+
+FinClose AI solves this with a **deterministic numeric claim verifier** that runs between the Executor and Critic:
+
+```
+  Executor output
+       │
+       ▼
+  ┌────────────────────────────────────────────────────────┐
+  │  NUMERIC CLAIM VERIFIER                                │
+  │                                                        │
+  │  1. Extract all dollar amounts from analysis text      │
+  │     Handles: $285,000  285,000  974654.96  $1.2M       │
+  │                                                        │
+  │  2. Flatten all numeric values from retrieved_data     │
+  │     GL debits/credits, variance amounts, AP/AR         │
+  │     balances, accrual amounts, dataset totals          │
+  │                                                        │
+  │  3. For each extracted claim, find nearest data value  │
+  │     and compute relative delta:                        │
+  │       ≤15% off  → verified   ✓  (rounding/format)     │
+  │     15–50% off  → suspicious ●  (worth investigating)  │
+  │      >50% off  → mismatch   ⚠  (likely hallucination) │
+  │                                                        │
+  │  4. Inject full verification report into Critic prompt │
+  │     before LLM review runs — Critic cannot be fooled  │
+  │     by confident phrasing around a wrong number        │
+  └────────────────────────────────────────────────────────┘
+       │
+       ▼
+  Critic prompt includes:
+    "MISMATCH: $4.2M → closest data value $1.1M (73% off)"
+       │
+       ▼
+  Mismatch rate feeds Arithmetic Integrity confidence dim
+```
+
+The verifier badge appears in the Verdict panel: `⚠ 7/10 verified · 2 suspicious · 1 mismatch`
+
+---
+
+## SOX Flag Drill-Downs
+
+Each SOX flag in the UI is an expandable panel. Rather than raw data tables, it shows **executive-readable memo cards** — one card per source Oracle GL record:
+
+```
+  ▲ SELF_APPROVAL  (expanded)
+  ┌────────────────────────────────────────────────────────────────┐
+  │ Plain-English explanation:                                     │
+  │ "A journal entry was approved by the same person who          │
+  │  prepared it — this violates the segregation of duties        │
+  │  control required by SOX Section 404."                        │
+  │                                                               │
+  │ Required Action: Reverse and repost with independent approval │
+  │                                                               │
+  │  Oracle GL — 2 flagged record(s)                              │
+  │  ┌──────────────────────────────────────────────────┐         │
+  │  │ JE-202412-00028              Dec 28, 2024         │         │
+  │  │ Accounts Receivable - Trade                      │         │
+  │  │ Amount: $249,998.54 Dr                           │         │
+  │  │ Prepared by: jsmith                              │         │
+  │  │ Approved by: jsmith  ⚠ Same person as preparer  │         │  ← highlighted in amber
+  │  └──────────────────────────────────────────────────┘         │
+  │                                                               │
+  │  Source hash (SHA-256): a3f8c2d19e4b…                        │  ← fine print for auditors
+  └────────────────────────────────────────────────────────────────┘
+```
+
+The violation-specific field is highlighted (approver for SELF_APPROVAL, date for WEEKEND_POSTING, etc.). The SHA-256 hash of the exact queried dataset is shown as fine print — present for auditors who need it, invisible to executives who don't.
 
 ---
 
@@ -180,12 +305,11 @@ This is not a demo. It is a functioning accounting automation engine backed by r
   │ anomaly_type   VARCHAR       │    └────────────────────────────────────┘
   └──────────────────────────────┘
           │                            recon_items (110 supporting items)
-          │                            ┌────────────────────────────────────┐
-          ▼                            │ item_id     • category             │
-  chart_of_accounts                   │ recon_id    • aging_days ◄─── KPI  │
-  39 accounts | 5 types               │ amount      • reference            │
-  Asset/Liability/Equity              └────────────────────────────────────┘
-  Revenue/Expense
+          ▼                            ┌────────────────────────────────────┐
+  chart_of_accounts                   │ item_id     • category             │
+  39 accounts | 5 types               │ recon_id    • aging_days ◄─── KPI  │
+  Asset/Liability/Equity              │ amount      • reference            │
+  Revenue/Expense                     └────────────────────────────────────┘
 
   ORACLE FUSION AP                    ORACLE FUSION AR
   ─────────────────                   ──────────────────
@@ -194,9 +318,9 @@ This is not a demo. It is a functioning accounting automation engine backed by r
   │ vendor_name           │           │ customer_name            │
   │ invoice_amount        │           │ open_balance             │
   │ open_amount  ◄─── KPI │           │ aging_bucket ◄─── KPI   │
-  │ status               │           │  Current / 31-60         │
-  │ due_date             │           │  61-90 / 91-120 / 120+   │
-  │ po_number            │           │ collection_status        │
+  │ status                │           │  Current / 31-60         │
+  │ due_date              │           │  61-90 / 91-120 / 120+   │
+  │ po_number             │           │ collection_status        │
   └───────────────────────┘           └──────────────────────────┘
 
   ORACLE GL — ACCRUALS (14)           HFM — VARIANCE ANALYSIS (10)
@@ -236,13 +360,13 @@ Every agent action generates an immutable audit entry. This is what makes the sy
 └─────────────────────────────────────────────────────────────────────────────┘
 
   {
-    "timestamp":   "2024-12-31T18:42:07.441Z",     ← UTC, always
-    "agent":       "executor",                      ← attribution
-    "action":      "execute_variance_analysis",     ← what happened
-    "input_hash":  "a3f8c2d19e4b",                 ← SHA-256 of inputs
+    "timestamp":   "2024-12-31T18:42:07.441+00:00",    ← UTC, always
+    "agent":       "executor",                          ← attribution
+    "action":      "execute_variance_analysis",         ← what happened
+    "input_hash":  "a3f8c2d19e4b",                     ← SHA-256 of inputs
     "reasoning":   "Executed variance analysis using 2 datasets",
     "output":      "4 accounts exceed 10% threshold...",
-    "sox_flags":   ["THRESHOLD_BREACH"],            ← compliance signals
+    "sox_flags":   ["THRESHOLD_BREACH"],                ← compliance signals
     "citations":   ["Oracle/HFM Variance | 4 threshold breaches"],
     "confidence":  0.88
   }
@@ -262,11 +386,11 @@ Every agent action generates an immutable audit entry. This is what makes the sy
   CRITIC VERDICT FLOW
   ───────────────────
 
-  Rule-based checks  ──┐
-  (deterministic)      │
-                       ├──▶  Combined SOX Flag List  ──▶  Verdict
-  LLM review      ─────┘
-  (contextual)
+  Rule-based checks   ──┐
+  (deterministic)       │
+                        ├──▶  Numeric claim verifier  ──▶  5-dim confidence
+  LLM review      ──────┘         (deterministic)              breakdown
+  (contextual, 10% weight)
 
   APPROVED   → All checks pass. Ready for Controller sign-off.
   FLAGGED    → Issues found. Usable, but requires management attention.
@@ -357,8 +481,7 @@ The dataset contains 11 intentionally injected SOX control violations across the
   LangGraph 0.2        Directed state graph wiring the 4-agent pipeline.
                        State flows as a typed dataclass — no hidden globals.
                        Deterministic routing: START→planner→retriever→
-                       executor→critic→END. Easily extensible to conditional
-                       edges (e.g., re-route rejected analyses back to executor).
+                       executor→critic→END.
 
   LangChain 0.3        Prompt management, message types, and LLM abstraction.
                        Allows swapping Ollama for Azure OpenAI or Claude API
@@ -374,7 +497,6 @@ The dataset contains 11 intentionally injected SOX control violations across the
 
   Alternatives         llama3.2:3b  → lighter, ~2GB RAM, good for demos
                        qwen2.5:7b   → strong math, good for JE generation
-                       deepseek-r1  → best reasoning, needs 8GB+ for 7B
 
   DATA LAYER
   ──────────
@@ -394,29 +516,27 @@ The dataset contains 11 intentionally injected SOX control violations across the
                        rec policy, ASC 606, accruals, close checklist).
                        Injected into Executor context for grounded output.
 
-  ChromaDB (roadmap)   Local vector store for semantic policy retrieval.
-                       Current implementation uses full-text injection;
-                       ChromaDB chunking + embedding is the next upgrade.
-
   RESPONSIBLE AI
   ──────────────
   Deterministic SOX    Rule-based control checks run independently of the
   rule engine          LLM — provides an objective compliance floor that
                        cannot be hallucinated away.
 
+  Numeric claim        Dollar amounts extracted from Executor output and
+  verifier             cross-checked against retrieved_data before Critic
+                       review. Catches hallucinated numbers regardless of
+                       how confidently the Executor phrases them.
+
+  5-dimension          Confidence score decomposed into Data Completeness,
+  confidence           Policy Alignment, Arithmetic Integrity (30% weight),
+                       Anomaly Coverage, and AI Coherence (10% weight).
+                       Four of five dimensions are fully deterministic.
+
   Input hashing        SHA-256 of all agent inputs. Stored in audit log.
                        Detects data tampering between pipeline stages.
 
-  Confidence scoring   Critic emits a 0.0–1.0 confidence score alongside
-                       its verdict. Low-confidence outputs surface for
-                       mandatory human review.
-
   Append-only log      Audit entries are never modified or deleted.
                        Designed for external audit PBC list readiness.
-
-  Citation requirement Every Executor output must cite source documents
-                       and data hashes. Hallucination without grounding
-                       fails the Critic review.
 ```
 
 ---
@@ -430,34 +550,22 @@ finclose_ai/
 │
 ├── core/
 │   ├── state.py                AgentState dataclass + enums (SoxFlag, TaskType)
+│   │                           Includes confidence_breakdown and numeric_verification fields
 │   └── db_tools.py             Enterprise data tool layer (Oracle/Blackline API sim)
+│                               get_gl_by_anomaly_type() for SOX flag drill-downs
 │
 ├── agents/
-│   └── agents.py               All 4 agents: Planner, Retriever, Executor, Critic
+│   └── agents.py               All 4 agents + numeric claim verifier
+│                               _verify_numeric_claims() · _compute_confidence_breakdown()
 │
 ├── ui/
-│   └── app.py                  Streamlit dashboard — dark theme, Plotly charts, real-time progress
-│
-├── api/
-│   └── server.py               FastAPI REST layer — /run, /health, /demo/{task}, /audit
-│
-├── eval/
-│   ├── test_queries.json       20-query evaluation set across 5 task types
-│   ├── ground_truth.json       Expected SOX flags, keywords, verdicts per query
-│   └── run_eval.py             Scoring script — faithfulness, accuracy, SOX recall
+│   └── app.py                  Streamlit dashboard
+│                               Dark theme · Plotly charts · 5-dim confidence bars
+│                               SOX flag memo cards · Claim verifier badge
+│                               Markdown table rendering · SOX HTML report export
 │
 ├── monitoring/
-│   └── metrics.py              JSONL metrics tracker — latency, confidence, verdict distribution
-│
-├── tests/
-│   ├── test_planner.py         8 unit tests (LLM mocked)
-│   ├── test_retriever.py       10 unit tests (real DB, no LLM)
-│   ├── test_executor.py        6 unit tests (LLM mocked)
-│   ├── test_critic.py          17 unit tests — rule-based SOX checks + parsing
-│   └── test_integration.py     Full pipeline + schema tests (Ollama-gated)
-│
-├── scripts/
-│   └── setup.sh                One-command environment setup
+│   └── metrics.py              JSONL metrics tracker (latency, confidence, verdicts)
 │
 └── finclose_data_gen/
     ├── generate_mock_data.py   Data generation script (run once to create DB)
@@ -470,7 +578,7 @@ finclose_ai/
 
 ### Prerequisites
 
-- Python 3.9+
+- Python 3.12
 - [Ollama](https://ollama.com) installed and running
 - ~5GB free RAM (for Mistral 7B Q4)
 
@@ -478,15 +586,20 @@ finclose_ai/
 
 ```bash
 # 1. Clone the repository
-git clone https://gitlab.com/zparker68/finclose-ai.git
-cd finclose-ai
+git clone https://github.com/zparker68/finclose_ai.git
+cd finclose_ai
 
-# 2. One-command setup (installs deps, pulls model, generates DB)
-bash scripts/setup.sh
+# 2. Create and activate virtual environment
+python3 -m venv venv
+source venv/bin/activate
 
-# — or manually:
+# 3. Install dependencies
 pip install -r requirements.txt
+
+# 4. Pull the default model
 ollama pull mistral
+
+# 5. Generate the mock enterprise database
 python finclose_data_gen/generate_mock_data.py
 ```
 
@@ -496,33 +609,21 @@ python finclose_data_gen/generate_mock_data.py
 # Terminal 1 — keep Ollama running
 ollama serve
 
-# Streamlit dashboard
-python -m streamlit run ui/app.py
-
-# FastAPI server (http://localhost:8000/docs)
-python -m uvicorn api.server:app --reload
+# Streamlit dashboard (primary interface)
+streamlit run ui/app.py
 
 # CLI demo (interactive — pick from 5 task types)
 python pipeline.py
-
-# Unit tests (no Ollama needed)
-python -m pytest tests/ -v -m "not integration"
-
-# Eval suite (needs Ollama)
-python eval/run_eval.py
 ```
 
 ### Swap the LLM
 
 ```bash
 # Lighter model (2GB RAM, faster demo)
-FINCLOSE_MODEL=llama3.2:3b python pipeline.py
+FINCLOSE_MODEL=llama3.2:3b streamlit run ui/app.py
 
 # Best math reasoning (needs 8GB+)
-FINCLOSE_MODEL=qwen2.5:7b python pipeline.py
-
-# Azure OpenAI (requires langchain-openai + API key)
-# Edit agents/agents.py: replace ChatOllama with AzureChatOpenAI
+FINCLOSE_MODEL=qwen2.5:7b streamlit run ui/app.py
 ```
 
 ### Connect to Real Systems
@@ -539,7 +640,7 @@ def get_reconciliations(period: str) -> dict:
 # Production (Oracle Fusion REST API)
 def get_reconciliations(period: str) -> dict:
     response = requests.get(
-        f"https://your-oracle-instance.oraclecloud.com/fscmRestApi/resources/11.13.18.05/generalLedgerJournals",
+        "https://your-oracle.oraclecloud.com/fscmRestApi/resources/11.13.18.05/reconciliations",
         params={"period": period},
         headers={"Authorization": f"Bearer {ORACLE_TOKEN}"}
     )
@@ -563,8 +664,17 @@ The agents, state schema, audit trail, and SOX logic are identical. Only the tra
   - Which data sources were used (with SHA-256 hashes)
   - Which policies were referenced (POL-001 through POL-005)
   - Which agent produced each section
-  - Confidence score from independent Critic review
+  - 5-dimension confidence breakdown visible in the UI
   No black-box outputs. Every conclusion is traceable to source data.
+
+  HALLUCINATION CONTROLS
+  ──────────────────────
+  Three independent layers:
+  1. Retriever pulls ground-truth data before Executor generates narrative
+  2. Numeric claim verifier cross-checks every dollar amount in the
+     Executor's output against retrieved_data before Critic review —
+     a confidently hallucinated number cannot pass this gate
+  3. Critic independently verifies completeness and policy alignment
 
   FAIRNESS & BIAS PREVENTION
   ──────────────────────────
@@ -587,35 +697,34 @@ The agents, state schema, audit trail, and SOX logic are identical. Only the tra
   - Input hashes enable tamper detection
   - Agent role separation mirrors segregation of duties requirements
   - No agent can approve its own outputs (Critic is always separate)
+  - SOX HTML report exportable directly from the UI
 
   HUMAN OVERSIGHT
   ───────────────
   FLAGGED and REJECTED outputs require mandatory human review before
   any action is taken. The system issues recommendations, not commands.
   All journal entries require human approval before posting to the GL.
-  Confidence scores below 0.75 trigger automatic escalation.
-
-  HALLUCINATION CONTROLS
-  ──────────────────────
-  - Retriever pulls data before Executor generates narrative
-  - Critic independently verifies dollar amounts against source data
-  - Policy citations must match retrieved documents
-  - Round-trip consistency check: JE debits must equal JE credits
+  Confidence composite below 50% triggers automatic escalation band.
 ```
 
 ---
 
 ## Roadmap
 
-- [x] **Streamlit UI** — One-click "Run Monthly Close" dashboard with Plotly visualizations (`ui/app.py`)
-- [x] **FastAPI REST layer** — Full HTTP API exposing pipeline with `/run`, `/health`, `/demo/{task}`, `/audit` (`api/server.py`)
-- [x] **Evaluation framework** — RAGAS-style faithfulness, accuracy, and SOX recall scoring on 20-query test set (`eval/`)
-- [x] **Model monitoring** — JSONL-based metrics tracker for latency, confidence drift, and SOX flag rates (`monitoring/metrics.py`)
-- [x] **Test suite** — 47 unit + integration tests covering all 4 agents (`tests/`)
+- [x] **Multi-agent pipeline** — LangGraph 4-agent graph (Planner → Retriever → Executor → Critic)
+- [x] **Enterprise data layer** — Oracle GL/AP/AR + Blackline simulation with 10 tables
+- [x] **SOX rule engine** — Deterministic checks for 8 violation types, independent of LLM
+- [x] **Streamlit UI** — Dark theme dashboard with Plotly charts, real-time agent progress, export buttons
+- [x] **GL source traceability** — Clickable SOX flag drill-downs showing exact Oracle GL records
+- [x] **Executive memo cards** — Plain-English SOX flag explanations with highlighted violation fields
+- [x] **5-dimension confidence breakdown** — Replaces single LLM scalar with 4 deterministic + 1 LLM dimension
+- [x] **Numeric claim verifier** — Deterministic dollar-amount cross-check between Executor and Critic
+- [x] **SOX report export** — Self-contained HTML audit report with certification statement
+- [ ] **FastAPI REST layer** — HTTP API exposing pipeline for external system integration
 - [ ] **ChromaDB RAG** — Semantic chunking of policy documents with hybrid search
+- [ ] **Evaluation framework** — Faithfulness, accuracy, and SOX recall scoring on a test query set
 - [ ] **Conditional routing** — REJECTED outputs automatically re-routed to Executor for revision
 - [ ] **Multi-period analysis** — Quarter-over-quarter and year-over-year comparisons
-- [ ] **HFM consolidation** — Intercompany elimination automation
 
 ---
 
@@ -623,29 +732,24 @@ The agents, state schema, audit trail, and SOX logic are identical. Only the tra
 
 FinClose AI was built as a portfolio demonstration of production-grade AI engineering applied to enterprise accounting automation. It directly mirrors the architecture and use cases of AI initiatives at leading global accounting organizations — including agent-based workflow orchestration, responsible AI controls, SOX compliance tooling, and enterprise system integration patterns.
 
-**Tech stack alignment with enterprise accounting AI requirements:**
-
 | Requirement | Implementation |
 |---|---|
-| AI agents for accounting use cases | LangGraph multi-agent pipeline |
+| AI agents for accounting use cases | LangGraph 4-agent pipeline |
 | Workflow orchestration & automation | Directed state graph with typed state |
-| Enterprise system integration | db_tools.py REST API abstraction layer |
-| Data pipelines | SQLite ETL + Pandas transforms |
-| Responsible AI | Deterministic rule checks + confidence scoring |
-| SOX compliance | Append-only audit log + input hashing |
-| Model evaluation | Critic agent + confidence scoring |
-| Offline / data privacy | 100% local Ollama inference |
-| Power Platform-style UX | Streamlit UI (`ui/app.py`) — dark theme, Plotly charts, real-time agent progress |
-| REST API layer | FastAPI server (`api/server.py`) — `/run`, `/health`, `/demo/{task}`, `/audit` endpoints |
-| Evaluation framework | 20-query test set with faithfulness, accuracy, and SOX recall scoring (`eval/`) |
-| Observability | JSONL metrics tracking latency, confidence drift, verdict distribution (`monitoring/`) |
-| Test coverage | 47 unit + integration tests across all agents (`tests/`) |
+| Enterprise system integration | `db_tools.py` REST API abstraction layer |
+| Responsible AI / hallucination controls | Deterministic numeric claim verifier + 5-dim confidence |
+| SOX compliance | Append-only audit log + SHA-256 input hashing |
+| Calibrated confidence scoring | 4 deterministic dimensions, LLM downweighted to 10% |
+| Source traceability | Per-flag GL drill-downs with highlighted violation fields |
+| Offline / data privacy | 100% local Ollama inference, zero data egress |
+| Executive-readable output | Memo cards, plain-English explanations, SOX HTML export |
+| Model flexibility | `FINCLOSE_MODEL` env var — swap Mistral/Llama/Qwen at runtime |
 
 ---
 
 <div align="center">
 
 *Built by Zac Parker · Las Vegas, NV*
-*gitlab.com/zparker68*
+*github.com/zparker68*
 
 </div>
