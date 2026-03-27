@@ -148,6 +148,7 @@ def get_unbalanced_entries(period: str) -> dict:
         "source": "Oracle Fusion GL — Balance Validation",
         "period": period,
         "unbalanced_count": len(data),
+        "data_hash": _hash(data),
         "records": data,
     }
 
@@ -357,6 +358,7 @@ def get_variance_analysis(period: str, threshold_only: bool = False) -> dict:
         "period": period,
         "record_count": len(data),
         "threshold_breaches": sum(1 for r in data if r.get("threshold_breached")),
+        "data_hash": _hash(data),
         "records": data,
     }
 

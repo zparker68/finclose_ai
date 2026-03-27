@@ -1372,37 +1372,77 @@ with col_sox:
 
                 # ── Source drill-down ─────────────────────────────────────
                 anomaly_type = FLAG_TO_ANOMALY_TYPE.get(fv)
+                # session-state key for toggling the raw-record inspector
+                raw_key = f"raw_{fv}_{result.period}"
+
+                def _hash_btn(hash_val: str, raw_records: list, key: str):
+                    """Render a clickable hash that toggles the full raw-record view."""
+                    if key not in st.session_state:
+                        st.session_state[key] = False
+                    st.markdown(
+                        f'<div style="color:{C_TEXT2};font-size:0.65rem;'
+                        f'text-transform:uppercase;letter-spacing:0.06em;'
+                        f'margin-top:0.4rem;margin-bottom:0.15rem;">'
+                        f'Source hash (click to inspect raw records)</div>',
+                        unsafe_allow_html=True,
+                    )
+                    if st.button(
+                        f"hash: {hash_val}",
+                        key=f"btn_{key}",
+                        use_container_width=True,
+                    ):
+                        st.session_state[key] = not st.session_state[key]
+                    if st.session_state[key]:
+                        st.markdown(
+                            f'<div style="color:{C_GOLD};font-size:0.65rem;'
+                            f'text-transform:uppercase;letter-spacing:0.08em;'
+                            f'margin:0.4rem 0 0.2rem;">Raw Oracle GL Record(s)</div>',
+                            unsafe_allow_html=True,
+                        )
+                        st.dataframe(
+                            pd.DataFrame(raw_records),
+                            use_container_width=True, hide_index=True,
+                        )
 
                 if fv == "THRESHOLD_BREACH":
                     breaches = _fetch_variance_breaches(result.period)
                     recs = breaches.get("records", [])
                     if recs:
+                        st.markdown(
+                            f'<div style="color:{C_TEXT2};font-size:0.65rem;'
+                            f'text-transform:uppercase;letter-spacing:0.08em;'
+                            f'margin-bottom:0.25rem;">'
+                            f'Oracle/HFM — {len(recs)} threshold breach(es)</div>',
+                            unsafe_allow_html=True,
+                        )
                         df_b = pd.DataFrame(recs)[
                             ["account_name", "budget_amount", "actual_amount",
                              "vs_budget_pct", "favorable_unfavorable"]
                         ].rename(columns={
-                            "account_name":       "Account",
-                            "budget_amount":      "Budget",
-                            "actual_amount":      "Actual",
-                            "vs_budget_pct":      "Var %",
+                            "account_name":          "Account",
+                            "budget_amount":         "Budget",
+                            "actual_amount":         "Actual",
+                            "vs_budget_pct":         "Var %",
                             "favorable_unfavorable": "F/U",
                         })
                         df_b["Budget"] = df_b["Budget"].apply(_compact)
                         df_b["Actual"] = df_b["Actual"].apply(_compact)
                         df_b["Var %"]  = df_b["Var %"].apply(lambda x: f"{x:.1f}%")
-                        st.markdown(
-                            f'<div style="color:{C_TEXT3};font-size:0.65rem;'
-                            f'text-transform:uppercase;letter-spacing:0.08em;'
-                            f'margin-bottom:0.25rem;">Oracle/HFM — Threshold Breaches</div>',
-                            unsafe_allow_html=True,
-                        )
                         st.dataframe(df_b, use_container_width=True,
                                      hide_index=True, height=min(200, 40 + 35 * len(df_b)))
+                        _hash_btn(breaches.get("data_hash", "—"), recs, raw_key)
 
                 elif fv == "UNBALANCED_ENTRY":
                     unbal = _fetch_unbalanced(result.period)
                     recs  = unbal.get("records", [])
                     if recs:
+                        st.markdown(
+                            f'<div style="color:{C_TEXT2};font-size:0.65rem;'
+                            f'text-transform:uppercase;letter-spacing:0.08em;'
+                            f'margin-bottom:0.25rem;">'
+                            f'Oracle GL — {len(recs)} unbalanced entry(s)</div>',
+                            unsafe_allow_html=True,
+                        )
                         df_u = pd.DataFrame(recs).rename(columns={
                             "je_id":         "JE-ID",
                             "total_debits":  "Debits",
@@ -1412,19 +1452,21 @@ with col_sox:
                         df_u["Debits"]    = df_u["Debits"].apply(_compact)
                         df_u["Credits"]   = df_u["Credits"].apply(_compact)
                         df_u["Imbalance"] = df_u["Imbalance"].apply(lambda x: f"${x:,.2f}")
-                        st.markdown(
-                            f'<div style="color:{C_TEXT3};font-size:0.65rem;'
-                            f'text-transform:uppercase;letter-spacing:0.08em;'
-                            f'margin-bottom:0.25rem;">Oracle GL — Unbalanced Entries</div>',
-                            unsafe_allow_html=True,
-                        )
                         st.dataframe(df_u, use_container_width=True,
                                      hide_index=True, height=min(160, 40 + 35 * len(df_u)))
+                        _hash_btn(unbal.get("data_hash", "—"), recs, raw_key)
 
                 elif anomaly_type:
-                    gl = _fetch_gl_by_anomaly_type(result.period, anomaly_type)
+                    gl   = _fetch_gl_by_anomaly_type(result.period, anomaly_type)
                     recs = gl.get("records", [])
                     if recs:
+                        st.markdown(
+                            f'<div style="color:{C_TEXT2};font-size:0.65rem;'
+                            f'text-transform:uppercase;letter-spacing:0.08em;'
+                            f'margin-bottom:0.25rem;">'
+                            f'Oracle GL — {len(recs)} flagged record(s)</div>',
+                            unsafe_allow_html=True,
+                        )
                         df_gl = pd.DataFrame(recs)[[
                             "je_id", "txn_date", "account_code", "account_name",
                             "debit", "credit", "created_by", "approved_by", "description"
@@ -1444,19 +1486,12 @@ with col_sox:
                         df_gl["Credit"] = df_gl["Credit"].apply(
                             lambda x: _compact(x) if x else "—")
                         df_gl["Description"] = df_gl["Description"].str[:30]
-                        st.markdown(
-                            f'<div style="color:{C_TEXT3};font-size:0.65rem;'
-                            f'text-transform:uppercase;letter-spacing:0.08em;'
-                            f'margin-bottom:0.25rem;">'
-                            f'Oracle GL — {len(recs)} source record(s) · '
-                            f'hash:{gl["data_hash"]}</div>',
-                            unsafe_allow_html=True,
-                        )
                         st.dataframe(df_gl, use_container_width=True,
                                      hide_index=True, height=min(220, 40 + 35 * len(df_gl)))
+                        _hash_btn(gl["data_hash"], recs, raw_key)
                     else:
                         st.markdown(
-                            f'<div style="color:{C_TEXT3};font-size:0.72rem;">'
+                            f'<div style="color:{C_TEXT2};font-size:0.72rem;">'
                             f'No source records found for this period.</div>',
                             unsafe_allow_html=True,
                         )
