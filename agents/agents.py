@@ -32,7 +32,7 @@ import os
 import re
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
@@ -63,7 +63,7 @@ def _audit(agent: str, action: str, inputs: dict,
            citations: list[str] | None = None,
            confidence: float = 1.0) -> AuditEntry:
     return AuditEntry(
-        timestamp=datetime.utcnow().isoformat() + "Z",
+        timestamp=datetime.now(timezone.utc).isoformat(),
         agent=agent,
         action=action,
         input_hash=_hash_inputs(inputs),
@@ -424,6 +424,247 @@ CITATIONS: [list of policy/data sources that support the review]
 SUMMARY: [2-3 sentence summary of the review findings]"""
 
 
+# ── Numeric Claim Verifier ────────────────────────────────────────────────────
+# Deterministic layer between Executor and Critic.
+# Extracts dollar amounts from the Executor's text and cross-checks them
+# against actual values in retrieved_data — no LLM involved.
+
+# Three patterns, all require >= $1,000 threshold in _extract_dollar_claims:
+#   1. Explicit $: $285,000  $1.2M  $285K
+#   2. Comma-formatted: 285,000  1,234,567  (Mistral sometimes omits $)
+#   3. Raw float: 974654.96  75787.75  (Mistral table output — no $ or commas)
+_DOLLAR_RE = re.compile(
+    r'\$\s*([\d,]+(?:\.\d+)?)\s*([KMBkmb](?:illion)?)?'              # group 1,2
+    r'|(?<![.\d\-])([\d]{1,3}(?:,\d{3})+(?:\.\d+)?)'                 # group 3 (comma-fmt)
+    r'|(?<![.\d\-])(\d{4,}\.\d+)(?![,\d])',                           # group 4 (raw float)
+    re.IGNORECASE,
+)
+
+# Fields to harvest as ground-truth numeric values from each retrieved dataset
+_NUMERIC_FIELDS = {
+    "debit", "credit", "amount", "invoice_amount", "open_amount",
+    "open_balance", "gl_balance", "sub_ledger_balance", "difference",
+    "budget_amount", "actual_amount", "vs_budget_amt", "variance_amt",
+    "prior_balance", "net_activity", "ending_balance",
+    "total_debits", "total_credits", "imbalance",
+    "total_open_payables", "total_accrual_amount", "total_unexplained_difference",
+}
+
+
+def _extract_dollar_claims(text: str) -> list[tuple[str, float]]:
+    """Return (raw_string, normalized_float) for every dollar amount in text.
+    Handles $285,000 · 285,000 · 974654.96 (raw float from Mistral tables)."""
+    results = []
+    for m in _DOLLAR_RE.finditer(text):
+        raw = m.group(0).strip()
+        # g1+g2: explicit $;  g3: comma-formatted;  g4: raw float
+        num_str = m.group(1) or m.group(3) or m.group(4)
+        suffix  = (m.group(2) or "").upper()
+        if not num_str:
+            continue
+        try:
+            num = float(num_str.replace(",", ""))
+        except ValueError:
+            continue
+        if suffix.startswith("K"):
+            num *= 1_000
+        elif suffix.startswith("M"):
+            num *= 1_000_000
+        elif suffix.startswith("B"):
+            num *= 1_000_000_000
+        if num >= 1_000:    # ignore trivially small amounts
+            results.append((raw, num))
+    return results
+
+
+def _flatten_data_values(retrieved_data: dict) -> list[float]:
+    """
+    Harvest all numeric ground-truth values from the pipeline's retrieved data.
+    Checks both dataset-level summary fields and per-record fields.
+    """
+    values: list[float] = []
+    for dataset in retrieved_data.values():
+        if not isinstance(dataset, dict):
+            continue
+        # Dataset-level summary totals (e.g. total_open_payables)
+        for k, v in dataset.items():
+            if k in _NUMERIC_FIELDS and isinstance(v, (int, float)) and v > 0:
+                values.append(float(v))
+        # Per-record fields
+        for rec in dataset.get("records", []):
+            if not isinstance(rec, dict):
+                continue
+            for k, v in rec.items():
+                if k in _NUMERIC_FIELDS and isinstance(v, (int, float)) and v and v > 0:
+                    values.append(float(v))
+    return values
+
+
+def _verify_numeric_claims(state: AgentState) -> dict:
+    """
+    Cross-check every dollar amount in the Executor's analysis against the
+    actual numbers in retrieved_data.
+
+    Verdict per claim:
+      verified   — within 15% of a known data value (rounding / presentation)
+      suspicious — 15–50% off nearest known value (possible rounding error)
+      mismatch   — >50% off every known value (likely hallucination)
+
+    Returns a summary dict stored in state.numeric_verification.
+    The Critic agent receives this summary before it writes its verdict,
+    so it cannot be fooled by confident phrasing around wrong numbers.
+    """
+    claims     = _extract_dollar_claims(state.analysis_result)
+    data_vals  = _flatten_data_values(state.retrieved_data)
+
+    if not claims:
+        return {"claims_extracted": 0, "verified": 0, "suspicious": 0,
+                "mismatches": 0, "details": [], "status": "no_claims"}
+
+    if not data_vals:
+        return {"claims_extracted": len(claims), "verified": 0,
+                "suspicious": len(claims), "mismatches": 0,
+                "details": [], "status": "no_data_to_compare"}
+
+    verified_n = suspicious_n = mismatch_n = 0
+    details: list[dict] = []
+
+    for raw, claim_val in claims:
+        closest   = min(data_vals, key=lambda x: abs(x - claim_val))
+        denom     = max(abs(closest), abs(claim_val))
+        delta_pct = abs(claim_val - closest) / denom * 100 if denom else 100.0
+
+        if delta_pct <= 15:
+            verdict_tag = "verified"
+            verified_n += 1
+        elif delta_pct <= 50:
+            verdict_tag = "suspicious"
+            suspicious_n += 1
+        else:
+            verdict_tag = "mismatch"
+            mismatch_n += 1
+
+        details.append({
+            "claim":     raw,
+            "value":     claim_val,
+            "closest":   closest,
+            "delta_pct": round(delta_pct, 1),
+            "verdict":   verdict_tag,
+        })
+
+    total   = verified_n + suspicious_n + mismatch_n
+    status  = ("all_verified" if mismatch_n == 0 and suspicious_n == 0
+               else "mismatches_found" if mismatch_n > 0
+               else "suspicious_found")
+
+    return {
+        "claims_extracted": len(claims),
+        "claims_checked":   total,
+        "verified":         verified_n,
+        "suspicious":       suspicious_n,
+        "mismatches":       mismatch_n,
+        "details":          details,          # full list for audit log
+        "status":           status,
+    }
+
+
+_CONFIDENCE_WEIGHTS = {
+    "data_completeness":    0.25,
+    "policy_alignment":     0.15,
+    "arithmetic_integrity": 0.30,
+    "anomaly_coverage":     0.20,
+    "llm_coherence":        0.10,
+}
+
+# Expected retrieval keys per task type (used to score data completeness)
+_TASK_EXPECTED_KEYS: dict[TaskType, list[str]] = {
+    TaskType.ANOMALY_DETECTION: ["anomalies", "gl_transactions"],
+    TaskType.VARIANCE_ANALYSIS: ["variance_analysis"],
+    TaskType.RECONCILIATION:    ["reconciliations"],
+    TaskType.ACCRUAL_REVIEW:    ["accruals"],
+    TaskType.JOURNAL_ENTRY:     ["gl_transactions", "accruals"],
+    TaskType.CLOSE_CHECKLIST:   ["reconciliations", "accruals", "variance_analysis"],
+}
+
+
+def _compute_confidence_breakdown(
+    state: AgentState,
+    rule_based_flags: list[dict],
+    llm_confidence: float,
+) -> dict[str, float]:
+    """
+    Computes 5 deterministic confidence dimensions from raw pipeline data.
+    Runs BEFORE the LLM verdict is accepted, so hallucinated Executor output
+    cannot inflate the score through confident phrasing alone.
+
+    Returns a dict of dimension_name → [0.0, 1.0] score.
+    """
+    scores: dict[str, float] = {}
+
+    # ── 1. Data Completeness ───────────────────────────────────────────────
+    # How many expected data sources came back non-empty?
+    expected = _TASK_EXPECTED_KEYS.get(state.task_type, [])
+    if not expected:
+        scores["data_completeness"] = 1.0  # general query — no hard expectation
+    else:
+        filled = 0
+        for key in expected:
+            dataset = state.retrieved_data.get(key, {})
+            n = dataset.get("record_count") or len(dataset.get("records", []))
+            if n > 0:
+                filled += 1
+        scores["data_completeness"] = filled / len(expected)
+
+    # ── 2. Policy Alignment ────────────────────────────────────────────────
+    # Were any accounting policies retrieved to ground the analysis?
+    n_policies = len(state.policy_context)
+    scores["policy_alignment"] = min(1.0, n_policies / 2.0)  # 2+ docs = full score
+
+    # ── 3. Arithmetic Integrity ────────────────────────────────────────────
+    # Two sub-signals, both deterministic:
+    #   a) Unbalanced JEs — each docks 25% (hard SOX control failure)
+    #   b) Numeric claim mismatches — fraction of Executor's dollar claims
+    #      that don't match any retrieved data value within 50%
+    unbalanced = 0
+    if "unbalanced" in state.retrieved_data:
+        unbalanced = state.retrieved_data["unbalanced"].get("unbalanced_count", 0)
+    if unbalanced == 0:
+        for rb in rule_based_flags:
+            if rb.get("flag") == SoxFlag.UNBALANCED_ENTRY.value:
+                unbalanced += 1
+
+    verif        = state.numeric_verification
+    checked      = verif.get("claims_checked", 0)
+    mismatch_n   = verif.get("mismatches", 0)
+    mismatch_penalty = (mismatch_n / checked) * 0.5 if checked > 0 else 0.0
+
+    scores["arithmetic_integrity"] = max(
+        0.0, 1.0 - (unbalanced * 0.25) - mismatch_penalty
+    )
+
+    # ── 4. Anomaly Coverage ────────────────────────────────────────────────
+    # What fraction of rule-based flags have their key identifiers
+    # (JE-ID or flag label) mentioned anywhere in the Executor's analysis?
+    if not rule_based_flags:
+        scores["anomaly_coverage"] = 1.0
+    else:
+        analysis_lower = state.analysis_result.lower()
+        mentioned = 0
+        for rb in rule_based_flags:
+            je_id = (rb.get("je_id") or "").lower()
+            label = rb.get("flag", "").lower().replace("_", " ")
+            if (je_id and je_id in analysis_lower) or (label and label in analysis_lower):
+                mentioned += 1
+        scores["anomaly_coverage"] = mentioned / len(rule_based_flags)
+
+    # ── 5. LLM Coherence (deliberately downweighted) ──────────────────────
+    # The Critic LLM's own confidence claim.  Only 10% weight because it is
+    # susceptible to confident hallucination by the same LLM family.
+    scores["llm_coherence"] = max(0.0, min(1.0, llm_confidence))
+
+    return scores
+
+
 def critic_agent(state: AgentState) -> AgentState:
     """
     Independent SOX compliance review and quality gate.
@@ -457,8 +698,29 @@ def critic_agent(state: AgentState) -> AgentState:
 
     llm = _llm(temperature=0.0)  # Zero temperature — deterministic compliance review
 
-    # Also run rule-based SOX checks on raw data (LLM-independent)
+    # ── Deterministic checks (LLM-independent) ────────────────────────────
     rule_based_flags = _run_sox_rule_checks(state)
+
+    # Numeric claim verifier: cross-check Executor's dollar amounts against
+    # retrieved_data BEFORE passing anything to the Critic LLM.
+    verification = _verify_numeric_claims(state)
+    state.numeric_verification = verification
+
+    # Build human-readable verification summary for the Critic prompt
+    verif_lines = [
+        f"NUMERIC CLAIM VERIFICATION (deterministic — pre-LLM):",
+        f"  Dollar claims extracted from analysis : {verification['claims_extracted']}",
+        f"  Verified against source data (≤15% off): {verification['verified']}",
+        f"  Suspicious (15–50% off nearest value)  : {verification['suspicious']}",
+        f"  Flagged mismatches (>50% off)          : {verification['mismatches']}",
+    ]
+    for d in verification.get("details", []):
+        if d["verdict"] in ("mismatch", "suspicious"):
+            verif_lines.append(
+                f"  ⚠ {d['verdict'].upper()}: {d['claim']} → "
+                f"closest data value ${d['closest']:,.0f} ({d['delta_pct']:.0f}% off)"
+            )
+    verif_block = "\n".join(verif_lines)
 
     prompt = f"""EXECUTOR ANALYSIS TO REVIEW:
 {state.analysis_result[:3000]}
@@ -466,13 +728,16 @@ def critic_agent(state: AgentState) -> AgentState:
 PERIOD: {state.period}
 TASK TYPE: {state.task_type.value}
 
+{verif_block}
+
 RULE-BASED SOX FINDINGS (already detected):
 {json.dumps(rule_based_flags, indent=2)}
 
 DATA SOURCES USED:
 {chr(10).join(state.citations)}
 
-Review the analysis for accuracy, SOX compliance, and completeness."""
+Review the analysis for accuracy, SOX compliance, and completeness.
+Pay particular attention to any MISMATCH or SUSPICIOUS numeric claims above."""
 
     try:
         response = llm.invoke([
@@ -490,8 +755,14 @@ Review the analysis for accuracy, SOX compliance, and completeness."""
     issues      = _extract_field(review, "ISSUES",      "None identified")
     summary     = _extract_field(review, "SUMMARY",     "Review complete.")
 
-    state.critic_verdict   = verdict
-    state.confidence_score = confidence
+    state.critic_verdict = verdict
+
+    # Compute 5-dimension confidence breakdown (deterministic; LLM is only 10%)
+    breakdown = _compute_confidence_breakdown(state, rule_based_flags, confidence)
+    state.confidence_breakdown = breakdown
+    state.confidence_score = round(
+        sum(breakdown[k] * _CONFIDENCE_WEIGHTS[k] for k in _CONFIDENCE_WEIGHTS), 3
+    )
 
     # Build a detail map: flag_name → description (rule-based have richer detail)
     flag_detail_map: dict[str, str] = {}
@@ -516,6 +787,19 @@ Review the analysis for accuracy, SOX compliance, and completeness."""
     if state.sox_flags:
         sox_block = f"\n\n⚠️  SOX FLAGS DETECTED: {', '.join(f.value for f in state.sox_flags)}"
 
+    # Build confidence breakdown summary line
+    dim_labels = {
+        "data_completeness":    "Data",
+        "policy_alignment":     "Policy",
+        "arithmetic_integrity": "Arithmetic",
+        "anomaly_coverage":     "Coverage",
+        "llm_coherence":        "AI",
+    }
+    breakdown_line = "  |  ".join(
+        f"{dim_labels[k]}: {breakdown[k]*100:.0f}%"
+        for k in dim_labels if k in breakdown
+    )
+
     state.final_response = f"""### {state.task_type.value.upper().replace('_', ' ')} REPORT
 **Period:** {state.period}  |  **Session:** {state.session_id}  |  **Prepared by:** {state.requested_by}
 
@@ -526,7 +810,8 @@ Review the analysis for accuracy, SOX compliance, and completeness."""
 ### CRITIC REVIEW
 
 **Verdict:** {verdict}
-**Confidence:** {confidence:.0%}
+**Composite Confidence:** {state.confidence_score:.0%}
+**Breakdown:** {breakdown_line}
 **Issues:** {issues}{sox_block}
 **Summary:** {summary}
 

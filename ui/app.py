@@ -27,7 +27,7 @@ import subprocess
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 # ── Path fix ──────────────────────────────────────────────────────────────────
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -432,6 +432,34 @@ div[data-testid="stButton"]:has(button[kind="primary"]) > button:hover {{
 }}
 .analysis-box strong {{ color: {C_TEXT}; font-weight: 600; }}
 .analysis-box .num   {{ color: {C_GOLD_LT}; font-weight: 600; }}
+
+/* ── Analysis table ── */
+.analysis-table {{
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.7rem;
+    margin: 0.25rem 0;
+}}
+.analysis-table thead tr {{
+    background: {C_CARD};
+    border-bottom: 1px solid {C_BORDER2};
+}}
+.analysis-table th {{
+    color: {C_TEXT2};
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 0.35rem 0.6rem;
+    text-align: left;
+    white-space: nowrap;
+}}
+.analysis-table td {{
+    color: {C_TEXT};
+    padding: 0.3rem 0.6rem;
+    border-bottom: 1px solid {C_BORDER};
+    vertical-align: top;
+}}
+.analysis-table tbody tr:hover {{ background: {C_CARD}; }}
 
 /* ── Freshness stamp ── */
 .freshness {{
@@ -869,44 +897,95 @@ def _confidence_gauge(score: float) -> go.Figure:
 # ── Analysis renderer ─────────────────────────────────────────────────────────
 
 def _render_analysis(text: str) -> str:
-    lines = []
-    for line in text.split("\n"):
-        # Replace box-drawing divider lines with a styled HR
-        if re.match(r'^[═─]{8,}$', line.strip()):
-            lines.append(f'<hr style="border:none;border-top:1px solid {C_BORDER2};margin:0.5rem 0;">')
+    """Convert LLM analysis text (markdown-ish) to styled HTML.
+    Handles headings, bold, HR dividers, and markdown pipe tables."""
+
+    def _fmt_line(line: str) -> str:
+        """Apply inline formatting to a single non-table line."""
+        line = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", line)
+        line = re.sub(
+            r"(\$[\d,]+(?:\.\d+)?(?:[KMB])?|\b\d[\d,]*(?:\.\d+)?%)",
+            r'<span class="num">\1</span>', line,
+        )
+        safe = (line
+            .replace("&", "&amp;")
+            .replace("<strong>", "\x00STRONG\x00")
+            .replace("</strong>", "\x00/STRONG\x00")
+            .replace('<span class="num">', "\x00NUM\x00")
+            .replace("</span>", "\x00/NUM\x00")
+            .replace("<h3>", "\x00H3\x00").replace("</h3>", "\x00/H3\x00")
+            .replace("<", "&lt;").replace(">", "&gt;")
+            .replace("\x00STRONG\x00", "<strong>").replace("\x00/STRONG\x00", "</strong>")
+            .replace("\x00NUM\x00", '<span class="num">').replace("\x00/NUM\x00", "</span>")
+            .replace("\x00H3\x00", "<h3>").replace("\x00/H3\x00", "</h3>")
+        )
+        return safe
+
+    def _table_block_to_html(table_lines: list[str]) -> str:
+        """Convert a list of markdown table lines to an HTML table."""
+        header_cells: list[str] = []
+        body_rows:    list[list[str]] = []
+        for raw in table_lines:
+            cells = [c.strip() for c in raw.strip().strip("|").split("|")]
+            # separator row (|---|---|)
+            if all(re.match(r"^[-:]+$", c) for c in cells if c):
+                continue
+            if not header_cells:
+                header_cells = cells
+            else:
+                body_rows.append(cells)
+        if not header_cells:
+            return "\n".join(table_lines)
+        th = "".join(f"<th>{c}</th>" for c in header_cells)
+        tbody = ""
+        for row in body_rows:
+            # pad/trim to match header width
+            while len(row) < len(header_cells):
+                row.append("")
+            td = "".join(f"<td>{c}</td>" for c in row[:len(header_cells)])
+            tbody += f"<tr>{td}</tr>"
+        return (
+            f'<div style="overflow-x:auto;margin:0.5rem 0;">'
+            f'<table class="analysis-table">'
+            f"<thead><tr>{th}</tr></thead>"
+            f"<tbody>{tbody}</tbody>"
+            f"</table></div>"
+        )
+
+    # Group lines into table blocks vs regular content
+    raw_lines   = text.split("\n")
+    output      = []
+    table_buf:  list[str] = []
+
+    def _flush_table():
+        if table_buf:
+            output.append(_table_block_to_html(table_buf))
+            table_buf.clear()
+
+    for line in raw_lines:
+        is_table_row = bool(re.match(r"^\s*\|", line))
+
+        if is_table_row:
+            table_buf.append(line)
             continue
-        if re.match(r"^#{1,3}\s+", line):
+
+        # Not a table row — flush any pending table first
+        _flush_table()
+
+        stripped = line.strip()
+        if re.match(r'^[═─]{8,}$', stripped) or re.match(r"^---+$", stripped):
+            output.append(f'<hr style="border:none;border-top:1px solid {C_BORDER2};margin:0.5rem 0;">')
+        elif re.match(r"^#{1,3}\s+", line):
             heading = re.sub(r"^#{1,3}\s+", "", line).strip()
-            lines.append(f"<h3>{heading}</h3>")
-        elif re.match(r"^---+$", line.strip()):
-            lines.append(f'<hr style="border:none;border-top:1px solid {C_BORDER2};margin:0.5rem 0;">')
-        elif re.match(r"^[A-Z][A-Z\s]{3,}:\s*$", line.strip()):
-            lines.append(f"<h3>{line.strip()}</h3>")
+            output.append(f"<h3>{heading}</h3>")
+        elif re.match(r"^[A-Z][A-Z\s]{3,}:\s*$", stripped):
+            output.append(f"<h3>{stripped}</h3>")
         else:
-            line = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", line)
-            line = re.sub(
-                r"(\$[\d,]+(?:\.\d+)?(?:[KMB])?|\b\d[\d,]*(?:\.\d+)?%)",
-                r'<span class="num">\1</span>', line,
-            )
-            # safe-escape while preserving injected tags
-            safe = (line
-                .replace("&", "&amp;")
-                .replace("<strong>", "\x00STRONG\x00")
-                .replace("</strong>", "\x00/STRONG\x00")
-                .replace('<span class="num">', "\x00NUM\x00")
-                .replace("</span>", "\x00/NUM\x00")
-                .replace("<h3>", "\x00H3\x00")
-                .replace("</h3>", "\x00/H3\x00")
-                .replace("<", "&lt;").replace(">", "&gt;")
-                .replace("\x00STRONG\x00", "<strong>")
-                .replace("\x00/STRONG\x00", "</strong>")
-                .replace("\x00NUM\x00", '<span class="num">')
-                .replace("\x00/NUM\x00", "</span>")
-                .replace("\x00H3\x00", "<h3>")
-                .replace("\x00/H3\x00", "</h3>")
-            )
-            lines.append(safe if safe.strip() else "<br>")
-    return "\n".join(lines)
+            fmt = _fmt_line(line)
+            output.append(fmt if fmt.strip() else "<br>")
+
+    _flush_table()  # flush any trailing table
+    return "\n".join(output)
 
 # ── Export helpers ────────────────────────────────────────────────────────────
 
@@ -924,7 +1003,7 @@ def _build_audit_json(result) -> str:
         "sox_flags":     [f.value if hasattr(f, "value") else str(f)
                           for f in result.sox_flags],
         "processing_ms": result.processing_ms,
-        "exported_at":   datetime.utcnow().isoformat() + "Z",
+        "exported_at":   datetime.now(timezone.utc).isoformat() + "Z",
         "audit_entries": entries,
     }
     return json.dumps(payload, indent=2, default=str)
@@ -939,7 +1018,7 @@ def _build_analysis_txt(result) -> str:
         f"Verdict:    {result.critic_verdict}",
         f"Confidence: {result.confidence_score:.0%}",
         f"SOX Flags:  {len(result.sox_flags)}",
-        f"Generated:  {datetime.utcnow().isoformat()}Z",
+        f"Generated:  {datetime.now(timezone.utc).isoformat()}Z",
         f"{'=' * 50}",
         f"",
         result.final_response,
@@ -957,7 +1036,7 @@ def _build_analysis_txt(result) -> str:
 
 def _build_sox_report_html(result) -> str:
     """Generate a clean SOX-ready HTML report suitable for CFO review."""
-    generated = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     verdict    = result.critic_verdict or "—"
     conf_pct   = f"{result.confidence_score:.0%}"
     verdict_color = {"APPROVED": "#2EAA5C", "FLAGGED": "#D9922A", "REJECTED": "#C94040"}.get(verdict, "#6B7A8D")
@@ -1075,6 +1154,165 @@ def _build_sox_report_html(result) -> str:
 
 </body>
 </html>"""
+
+
+# ── SOX flag plain-English explanations ───────────────────────────────────────
+
+FLAG_PLAIN_ENGLISH: dict[str, str] = {
+    "SELF_APPROVAL":
+        "The same person prepared and approved this journal entry. "
+        "SOX Section 302 requires segregation of duties — the preparer and "
+        "approver must always be different people. This is a reportable deficiency.",
+    "MISSING_APPROVER":
+        "No approver is recorded for this entry. Company policy POL-001 §4 "
+        "requires dual approval for all manual journal entries before they can "
+        "be posted to the general ledger.",
+    "UNBALANCED_ENTRY":
+        "This journal entry does not balance — total debits do not equal total "
+        "credits. Every entry must net to zero. Posting an unbalanced entry "
+        "will corrupt the trial balance and cause the period close to fail.",
+    "WEEKEND_POSTING":
+        "This entry was posted on a weekend without a recorded exception approval. "
+        "POL-001 §5 requires Controller sign-off for all weekend postings to "
+        "prevent unauthorized end-of-period adjustments.",
+    "PRIOR_PERIOD_POSTING":
+        "This entry is dated outside the current accounting period. "
+        "Prior-period adjustments require CFO authorization and may trigger "
+        "SEC disclosure obligations under ASC 250.",
+    "ROUND_NUMBER_MANUAL":
+        "This manual entry is for a suspiciously round number over $50,000. "
+        "Round-number entries frequently indicate estimated or unsupported amounts "
+        "and are a known indicator of financial statement manipulation.",
+    "THRESHOLD_BREACH":
+        "This account's actual results exceeded budget by more than the company's "
+        "10% materiality threshold. A CFO-reviewed variance narrative explaining "
+        "the business reason is required before the period can be closed.",
+    "UNUSUAL_ACCOUNT_COMBO":
+        "This entry uses an account combination that does not match standard "
+        "accounting patterns for this entity. This may indicate a miscoding "
+        "or an attempt to bypass normal approval controls.",
+}
+
+
+def _fmt_date(d: str) -> str:
+    """Format ISO date string to readable form, e.g. 2024-12-11 → Dec 11, 2024."""
+    try:
+        from datetime import datetime
+        return datetime.strptime(d[:10], "%Y-%m-%d").strftime("%b %d, %Y")
+    except Exception:
+        return d or "—"
+
+
+def _gl_violation_card(rec: dict, fv: str, accent: str) -> str:
+    """Render a single GL journal entry as an executive-readable memo card."""
+    je_id   = rec.get("je_id", "—")
+    date    = _fmt_date(rec.get("txn_date", ""))
+    account = rec.get("account_name", rec.get("account_code", "—"))
+    debit   = rec.get("debit") or 0
+    credit  = rec.get("credit") or 0
+    amount  = _compact(debit) + " Dr" if debit else _compact(credit) + " Cr"
+    prep    = rec.get("created_by", "—") or "—"
+    appr    = rec.get("approved_by") or None
+    desc    = (rec.get("description") or "")[:60]
+    entity  = rec.get("legal_entity_name", "") or ""
+
+    # Flag-specific highlighting
+    if fv == "SELF_APPROVAL":
+        appr_html = (
+            f'<span style="color:{accent};font-weight:700;">'
+            f'{appr} &nbsp;⚠ Same person as preparer</span>'
+        )
+    elif fv == "MISSING_APPROVER":
+        appr_html = (
+            f'<span style="color:{accent};font-weight:700;">'
+            f'(none recorded) &nbsp;⚠ No approver on file</span>'
+        )
+    elif fv == "WEEKEND_POSTING":
+        date = f'<span style="color:{accent};font-weight:700;">{date} &nbsp;⚠ Weekend posting</span>'
+        appr_html = f'<span style="color:{C_TEXT}">{appr or "—"}</span>'
+    elif fv == "PRIOR_PERIOD_POSTING":
+        date = f'<span style="color:{accent};font-weight:700;">{date} &nbsp;⚠ Prior period</span>'
+        appr_html = f'<span style="color:{C_TEXT}">{appr or "—"}</span>'
+    else:
+        appr_html = f'<span style="color:{C_TEXT}">{appr or "—"}</span>'
+
+    return f"""
+<div style="background:{C_CARD};border:1px solid {C_BORDER};
+            border-left:3px solid {accent};border-radius:4px;
+            padding:0.65rem 0.8rem;margin-bottom:0.5rem;">
+  <div style="display:flex;justify-content:space-between;
+              align-items:baseline;margin-bottom:0.35rem;">
+    <span style="color:{C_TEXT};font-weight:700;font-size:0.8rem;
+                 letter-spacing:0.03em;">{je_id}</span>
+    <span style="color:{C_TEXT2};font-size:0.72rem;">{date}</span>
+  </div>
+  <div style="color:{C_TEXT};font-size:0.78rem;margin-bottom:0.1rem;">{account}</div>
+  {"" if not entity else f'<div style="color:{C_TEXT2};font-size:0.7rem;margin-bottom:0.2rem;">{entity}</div>'}
+  <div style="color:{C_TEXT2};font-size:0.72rem;margin-bottom:0.35rem;">
+    Amount: <span style="color:{C_TEXT};font-weight:600;">{amount}</span>
+  </div>
+  <div style="color:{C_TEXT2};font-size:0.72rem;margin-bottom:0.15rem;">
+    Prepared by: <span style="color:{C_TEXT};">{prep}</span>
+  </div>
+  <div style="color:{C_TEXT2};font-size:0.72rem;margin-bottom:0.3rem;">
+    Approved by: {appr_html}
+  </div>
+  {"" if not desc else f'<div style="color:{C_TEXT3};font-size:0.68rem;font-style:italic;">{desc}</div>'}
+</div>"""
+
+
+def _variance_card(rec: dict, accent: str) -> str:
+    """Render a single variance breach as an executive-readable memo card."""
+    account = rec.get("account_name", rec.get("account_code", "—"))
+    budget  = rec.get("budget_amount", 0)
+    actual  = rec.get("actual_amount", 0)
+    pct     = rec.get("vs_budget_pct", 0)
+    over    = actual - budget
+    fu      = rec.get("favorable_unfavorable", "")
+    fu_color = C_GREEN if fu == "Favorable" else accent
+
+    return f"""
+<div style="background:{C_CARD};border:1px solid {C_BORDER};
+            border-left:3px solid {accent};border-radius:4px;
+            padding:0.65rem 0.8rem;margin-bottom:0.5rem;">
+  <div style="color:{C_TEXT};font-weight:700;font-size:0.8rem;
+              margin-bottom:0.35rem;">{account}</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.2rem;
+              font-size:0.72rem;margin-bottom:0.3rem;">
+    <div style="color:{C_TEXT2};">Budget: <span style="color:{C_TEXT};">{_compact(budget)}</span></div>
+    <div style="color:{C_TEXT2};">Actual: <span style="color:{C_TEXT};">{_compact(actual)}</span></div>
+  </div>
+  <div style="color:{C_TEXT2};font-size:0.72rem;">
+    Variance: <span style="color:{accent};font-weight:700;">
+      {_compact(over)} ({pct:+.1f}%) &nbsp;⚠ Exceeds 10% threshold
+    </span>
+  </div>
+  <div style="color:{fu_color};font-size:0.68rem;margin-top:0.2rem;">{fu}</div>
+</div>"""
+
+
+def _unbalanced_card(rec: dict, accent: str) -> str:
+    """Render a single unbalanced JE as an executive-readable memo card."""
+    je_id    = rec.get("je_id", "—")
+    debits   = rec.get("total_debits", 0)
+    credits  = rec.get("total_credits", 0)
+    imbal    = rec.get("imbalance", 0)
+
+    return f"""
+<div style="background:{C_CARD};border:1px solid {C_BORDER};
+            border-left:3px solid {accent};border-radius:4px;
+            padding:0.65rem 0.8rem;margin-bottom:0.5rem;">
+  <div style="color:{C_TEXT};font-weight:700;font-size:0.8rem;
+              margin-bottom:0.35rem;">{je_id}</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.2rem;
+              font-size:0.72rem;margin-bottom:0.3rem;">
+    <div style="color:{C_TEXT2};">Total Debits: <span style="color:{C_TEXT};">{_compact(debits)}</span></div>
+    <div style="color:{C_TEXT2};">Total Credits: <span style="color:{C_TEXT};">{_compact(credits)}</span></div>
+  </div>
+  <div style="color:{accent};font-weight:700;font-size:0.75rem;">
+    ⚠ Imbalance: ${imbal:,.2f} — Entry does not balance
+  </div>
+</div>"""
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1294,9 +1532,10 @@ with col_verdict:
     st.markdown('<div class="panel-title">Verdict</div>', unsafe_allow_html=True)
 
     if result:
-        verdict = result.critic_verdict or "—"
-        conf    = result.confidence_score or 0.0
-        n_flags = len(result.sox_flags)
+        verdict  = result.critic_verdict or "—"
+        conf     = result.confidence_score or 0.0
+        n_flags  = len(result.sox_flags)
+        breakdown = getattr(result, "confidence_breakdown", {})
 
         st.markdown(_verdict_html(verdict), unsafe_allow_html=True)
 
@@ -1306,8 +1545,111 @@ with col_verdict:
         with c2:
             st.metric("SOX Flags", n_flags)
 
-        st.plotly_chart(_confidence_gauge(conf), use_container_width=True,
+        st.plotly_chart(_confidence_gauge(conf), width="stretch",
                         config={"displayModeBar": False})
+
+        # ── Confidence breakdown bars ──────────────────────────────────────
+        if breakdown:
+            _DIM_LABELS = {
+                "data_completeness":    ("Data Available",      "25%"),
+                "policy_alignment":     ("Policy Match",        "15%"),
+                "arithmetic_integrity": ("Math Verified",       "30%"),
+                "anomaly_coverage":     ("Findings Addressed",  "20%"),
+                "llm_coherence":        ("AI Coherence",        "10%"),
+            }
+            st.markdown(
+                f'<div style="color:{C_TEXT2};font-size:0.62rem;text-transform:uppercase;'
+                f'letter-spacing:0.1em;margin:0.6rem 0 0.3rem;">'
+                f'Confidence Breakdown</div>',
+                unsafe_allow_html=True,
+            )
+            bars_html = ""
+            for dim, (label, weight) in _DIM_LABELS.items():
+                score = breakdown.get(dim, 0.0)
+                pct   = round(score * 100)
+                bar_c = C_GREEN if pct >= 80 else (C_AMBER if pct >= 50 else C_RED)
+                bars_html += f"""
+<div style="margin-bottom:0.35rem;">
+  <div style="display:flex;justify-content:space-between;
+              font-size:0.68rem;margin-bottom:0.1rem;">
+    <span style="color:{C_TEXT2};">{label}
+      <span style="color:{C_TEXT3};font-size:0.6rem;">&nbsp;{weight}</span>
+    </span>
+    <span style="color:{bar_c};font-weight:700;">{pct}%</span>
+  </div>
+  <div style="background:{C_BORDER};border-radius:2px;height:4px;overflow:hidden;">
+    <div style="width:{pct}%;height:4px;background:{bar_c};
+                border-radius:2px;transition:width 0.3s;"></div>
+  </div>
+</div>"""
+            st.markdown(bars_html, unsafe_allow_html=True)
+
+        # ── Numeric claim verifier badge ───────────────────────────────────
+        nv = getattr(result, "numeric_verification", None)
+        if nv is None:
+            # Result pre-dates the verifier — prompt a re-run
+            st.markdown(
+                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
+                f'border-left:3px solid {C_TEXT3};border-radius:4px;'
+                f'padding:0.5rem 0.75rem;margin-top:0.5rem;">'
+                f'<div style="color:{C_TEXT2};font-size:0.6rem;text-transform:uppercase;'
+                f'letter-spacing:0.1em;margin-bottom:0.15rem;">Claim Verifier</div>'
+                f'<div style="color:{C_TEXT3};font-size:0.68rem;">'
+                f'Re-run pipeline to enable</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            nv_extracted = nv.get("claims_extracted", 0)
+            nv_checked   = nv.get("claims_checked", 0)
+            nv_verified  = nv.get("verified", 0)
+            nv_suspicious= nv.get("suspicious", 0)
+            nv_mismatch  = nv.get("mismatches", 0)
+            nv_status    = nv.get("status", "")
+
+            if nv_mismatch > 0:
+                nv_color, nv_icon = C_RED,   "⚠"
+            elif nv_suspicious > 0:
+                nv_color, nv_icon = C_AMBER, "●"
+            elif nv_extracted == 0:
+                nv_color, nv_icon = C_TEXT3, "○"
+            else:
+                nv_color, nv_icon = C_GREEN, "✓"
+
+            if nv_extracted == 0:
+                body = f'<span style="color:{C_TEXT3};font-size:0.68rem;">No numeric claims found in analysis</span>'
+            else:
+                body = (
+                    f'<span style="color:{nv_color};font-size:0.72rem;font-weight:600;">'
+                    f'{nv_icon} {nv_verified}/{nv_checked} verified'
+                    f'{"" if not nv_suspicious else f" · {nv_suspicious} suspicious"}'
+                    f'{"" if not nv_mismatch   else f" · {nv_mismatch} mismatch"}'
+                    f'</span>'
+                )
+
+            mismatch_detail = ""
+            for d in nv.get("details", []):
+                if d["verdict"] == "mismatch":
+                    mismatch_detail += (
+                        f'<div style="color:{C_RED};font-size:0.65rem;'
+                        f'margin-top:0.15rem;padding-left:0.5rem;">'
+                        f'⚠ {d["claim"]} → data shows '
+                        f'${d["closest"]:,.0f} ({d["delta_pct"]:.0f}% off)</div>'
+                    )
+
+            st.markdown(
+                f'<div style="background:{C_CARD};border:1px solid {C_BORDER};'
+                f'border-left:3px solid {nv_color};border-radius:4px;'
+                f'padding:0.5rem 0.75rem;margin-top:0.5rem;">'
+                f'<div style="color:{C_TEXT2};font-size:0.6rem;text-transform:uppercase;'
+                f'letter-spacing:0.1em;margin-bottom:0.25rem;">Claim Verifier</div>'
+                f'{body}'
+                f'{mismatch_detail}'
+                f'<div style="color:{C_TEXT3};font-size:0.6rem;margin-top:0.2rem;">'
+                f'{nv_extracted} dollar claims extracted from analysis</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
         st.markdown(f"""
         <div class="conf-thresholds">
@@ -1351,58 +1693,31 @@ with col_sox:
         for flag, detail in zip(result.sox_flags, result.sox_flag_details or []):
             fv      = flag.value if hasattr(flag, "value") else str(flag)
             tier    = FLAG_SEVERITY.get(fv, 3)
-            color   = sev_color.get(tier, C_GOLD)
+            accent  = sev_color.get(tier, C_GOLD)
             icon    = "▲" if tier == 1 else ("●" if tier == 2 else "○")
             action  = SOX_REMEDIATION.get(fv, "Review with controller.")
+            plain   = FLAG_PLAIN_ENGLISH.get(fv, detail)
 
             with st.expander(f"{icon} {fv}", expanded=(tier == 1)):
+                # Plain-English explanation (executive-facing)
                 st.markdown(
-                    f'<div style="color:{C_TEXT2};font-size:0.72rem;margin-bottom:0.4rem;">'
-                    f'{detail}</div>',
+                    f'<div style="color:{C_TEXT};font-size:0.78rem;'
+                    f'line-height:1.5;margin-bottom:0.5rem;">{plain}</div>',
                     unsafe_allow_html=True,
                 )
+
+                # Required action
                 st.markdown(
-                    f'<div style="color:{color};font-size:0.68rem;font-weight:600;'
-                    f'text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.6rem;">'
+                    f'<div style="color:{accent};font-size:0.68rem;font-weight:600;'
+                    f'text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.3rem;">'
                     f'Required Action</div>'
                     f'<div style="color:{C_TEXT2};font-size:0.72rem;margin-bottom:0.75rem;">'
                     f'{action}</div>',
                     unsafe_allow_html=True,
                 )
 
-                # ── Source drill-down ─────────────────────────────────────
+                # ── Source evidence cards ─────────────────────────────────
                 anomaly_type = FLAG_TO_ANOMALY_TYPE.get(fv)
-                # session-state key for toggling the raw-record inspector
-                raw_key = f"raw_{fv}_{result.period}"
-
-                def _hash_btn(hash_val: str, raw_records: list, key: str):
-                    """Render a clickable hash that toggles the full raw-record view."""
-                    if key not in st.session_state:
-                        st.session_state[key] = False
-                    st.markdown(
-                        f'<div style="color:{C_TEXT2};font-size:0.65rem;'
-                        f'text-transform:uppercase;letter-spacing:0.06em;'
-                        f'margin-top:0.4rem;margin-bottom:0.15rem;">'
-                        f'Source hash (click to inspect raw records)</div>',
-                        unsafe_allow_html=True,
-                    )
-                    if st.button(
-                        f"hash: {hash_val}",
-                        key=f"btn_{key}",
-                        use_container_width=True,
-                    ):
-                        st.session_state[key] = not st.session_state[key]
-                    if st.session_state[key]:
-                        st.markdown(
-                            f'<div style="color:{C_GOLD};font-size:0.65rem;'
-                            f'text-transform:uppercase;letter-spacing:0.08em;'
-                            f'margin:0.4rem 0 0.2rem;">Raw Oracle GL Record(s)</div>',
-                            unsafe_allow_html=True,
-                        )
-                        st.dataframe(
-                            pd.DataFrame(raw_records),
-                            use_container_width=True, hide_index=True,
-                        )
 
                 if fv == "THRESHOLD_BREACH":
                     breaches = _fetch_variance_breaches(result.period)
@@ -1411,26 +1726,25 @@ with col_sox:
                         st.markdown(
                             f'<div style="color:{C_TEXT2};font-size:0.65rem;'
                             f'text-transform:uppercase;letter-spacing:0.08em;'
-                            f'margin-bottom:0.25rem;">'
+                            f'margin-bottom:0.4rem;">'
                             f'Oracle/HFM — {len(recs)} threshold breach(es)</div>',
                             unsafe_allow_html=True,
                         )
-                        df_b = pd.DataFrame(recs)[
-                            ["account_name", "budget_amount", "actual_amount",
-                             "vs_budget_pct", "favorable_unfavorable"]
-                        ].rename(columns={
-                            "account_name":          "Account",
-                            "budget_amount":         "Budget",
-                            "actual_amount":         "Actual",
-                            "vs_budget_pct":         "Var %",
-                            "favorable_unfavorable": "F/U",
-                        })
-                        df_b["Budget"] = df_b["Budget"].apply(_compact)
-                        df_b["Actual"] = df_b["Actual"].apply(_compact)
-                        df_b["Var %"]  = df_b["Var %"].apply(lambda x: f"{x:.1f}%")
-                        st.dataframe(df_b, use_container_width=True,
-                                     hide_index=True, height=min(200, 40 + 35 * len(df_b)))
-                        _hash_btn(breaches.get("data_hash", "—"), recs, raw_key)
+                        for rec in recs[:5]:  # cap at 5 cards
+                            st.markdown(_variance_card(rec, accent),
+                                        unsafe_allow_html=True)
+                        if len(recs) > 5:
+                            st.markdown(
+                                f'<div style="color:{C_TEXT2};font-size:0.68rem;">'
+                                f'+ {len(recs)-5} more breach(es)</div>',
+                                unsafe_allow_html=True,
+                            )
+                        h = breaches.get("data_hash", "—")
+                        st.markdown(
+                            f'<div style="color:{C_TEXT3};font-size:0.6rem;'
+                            f'margin-top:0.5rem;">Source hash (SHA-256): {h}</div>',
+                            unsafe_allow_html=True,
+                        )
 
                 elif fv == "UNBALANCED_ENTRY":
                     unbal = _fetch_unbalanced(result.period)
@@ -1439,22 +1753,25 @@ with col_sox:
                         st.markdown(
                             f'<div style="color:{C_TEXT2};font-size:0.65rem;'
                             f'text-transform:uppercase;letter-spacing:0.08em;'
-                            f'margin-bottom:0.25rem;">'
+                            f'margin-bottom:0.4rem;">'
                             f'Oracle GL — {len(recs)} unbalanced entry(s)</div>',
                             unsafe_allow_html=True,
                         )
-                        df_u = pd.DataFrame(recs).rename(columns={
-                            "je_id":         "JE-ID",
-                            "total_debits":  "Debits",
-                            "total_credits": "Credits",
-                            "imbalance":     "Imbalance",
-                        })
-                        df_u["Debits"]    = df_u["Debits"].apply(_compact)
-                        df_u["Credits"]   = df_u["Credits"].apply(_compact)
-                        df_u["Imbalance"] = df_u["Imbalance"].apply(lambda x: f"${x:,.2f}")
-                        st.dataframe(df_u, use_container_width=True,
-                                     hide_index=True, height=min(160, 40 + 35 * len(df_u)))
-                        _hash_btn(unbal.get("data_hash", "—"), recs, raw_key)
+                        for rec in recs[:5]:
+                            st.markdown(_unbalanced_card(rec, accent),
+                                        unsafe_allow_html=True)
+                        if len(recs) > 5:
+                            st.markdown(
+                                f'<div style="color:{C_TEXT2};font-size:0.68rem;">'
+                                f'+ {len(recs)-5} more entry(s)</div>',
+                                unsafe_allow_html=True,
+                            )
+                        h = unbal.get("data_hash", "—")
+                        st.markdown(
+                            f'<div style="color:{C_TEXT3};font-size:0.6rem;'
+                            f'margin-top:0.5rem;">Source hash (SHA-256): {h}</div>',
+                            unsafe_allow_html=True,
+                        )
 
                 elif anomaly_type:
                     gl   = _fetch_gl_by_anomaly_type(result.period, anomaly_type)
@@ -1463,32 +1780,25 @@ with col_sox:
                         st.markdown(
                             f'<div style="color:{C_TEXT2};font-size:0.65rem;'
                             f'text-transform:uppercase;letter-spacing:0.08em;'
-                            f'margin-bottom:0.25rem;">'
+                            f'margin-bottom:0.4rem;">'
                             f'Oracle GL — {len(recs)} flagged record(s)</div>',
                             unsafe_allow_html=True,
                         )
-                        df_gl = pd.DataFrame(recs)[[
-                            "je_id", "txn_date", "account_code", "account_name",
-                            "debit", "credit", "created_by", "approved_by", "description"
-                        ]].rename(columns={
-                            "je_id":        "JE-ID",
-                            "txn_date":     "Date",
-                            "account_code": "Acct",
-                            "account_name": "Account",
-                            "debit":        "Debit",
-                            "credit":       "Credit",
-                            "created_by":   "Prepared",
-                            "approved_by":  "Approved",
-                            "description":  "Description",
-                        })
-                        df_gl["Debit"]  = df_gl["Debit"].apply(
-                            lambda x: _compact(x) if x else "—")
-                        df_gl["Credit"] = df_gl["Credit"].apply(
-                            lambda x: _compact(x) if x else "—")
-                        df_gl["Description"] = df_gl["Description"].str[:30]
-                        st.dataframe(df_gl, use_container_width=True,
-                                     hide_index=True, height=min(220, 40 + 35 * len(df_gl)))
-                        _hash_btn(gl["data_hash"], recs, raw_key)
+                        for rec in recs[:5]:
+                            st.markdown(_gl_violation_card(rec, fv, accent),
+                                        unsafe_allow_html=True)
+                        if len(recs) > 5:
+                            st.markdown(
+                                f'<div style="color:{C_TEXT2};font-size:0.68rem;">'
+                                f'+ {len(recs)-5} more record(s)</div>',
+                                unsafe_allow_html=True,
+                            )
+                        h = gl.get("data_hash", "—")
+                        st.markdown(
+                            f'<div style="color:{C_TEXT3};font-size:0.6rem;'
+                            f'margin-top:0.5rem;">Source hash (SHA-256): {h}</div>',
+                            unsafe_allow_html=True,
+                        )
                     else:
                         st.markdown(
                             f'<div style="color:{C_TEXT2};font-size:0.72rem;">'
@@ -1523,13 +1833,13 @@ c1, c2, c3, c4 = st.columns(4, gap="small")
 _opts = {"displayModeBar": False}
 
 with c1:
-    st.plotly_chart(_chart_trial_balance(period), use_container_width=True, config=_opts)
+    st.plotly_chart(_chart_trial_balance(period), width="stretch", config=_opts)
 with c2:
-    st.plotly_chart(_chart_variance(period),      use_container_width=True, config=_opts)
+    st.plotly_chart(_chart_variance(period),      width="stretch", config=_opts)
 with c3:
-    st.plotly_chart(_chart_ar_aging(period),      use_container_width=True, config=_opts)
+    st.plotly_chart(_chart_ar_aging(period),      width="stretch", config=_opts)
 with c4:
-    st.plotly_chart(_chart_accruals(period),      use_container_width=True, config=_opts)
+    st.plotly_chart(_chart_accruals(period),      width="stretch", config=_opts)
 
 # ── Audit trail + exports ─────────────────────────────────────────────────────
 st.markdown(f'<hr style="border-color:{C_BORDER};margin:0.5rem 0;">', unsafe_allow_html=True)
@@ -1586,7 +1896,7 @@ with st.expander(f"Audit Trail — {n_entries} entries", expanded=False):
 
         st.dataframe(
             audit_df.style.apply(_audit_style, axis=1),
-            use_container_width=True, hide_index=True,
+            width="stretch", hide_index=True,
             height=min(400, 60 + 35 * n_entries),
         )
     else:

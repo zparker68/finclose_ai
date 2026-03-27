@@ -159,7 +159,7 @@ def export_audit_log(state: AgentState, path: str | None = None) -> str:
         "confidence":    state.confidence_score,
         "sox_flags":     [f.value for f in state.sox_flags],
         "processing_ms": state.processing_ms,
-        "exported_at":   __import__('datetime').datetime.utcnow().isoformat() + "Z",
+        "exported_at":   __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),
         "audit_entries": [dataclasses.asdict(e) for e in state.audit_log],
     }
 

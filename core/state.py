@@ -106,7 +106,9 @@ class AgentState:
     sox_flags:       list[SoxFlag] = field(default_factory=list)
     sox_flag_details: list[str]    = field(default_factory=list)
     critic_verdict:  str           = ""          # APPROVED | FLAGGED | REJECTED
-    confidence_score: float        = 0.0
+    confidence_score: float        = 0.0         # weighted composite of breakdown dims
+    confidence_breakdown: dict     = field(default_factory=dict)   # 5-dim scores
+    numeric_verification: dict     = field(default_factory=dict)   # claim verifier output
     citations:       list[str]     = field(default_factory=list)
 
     # ── Cross-cutting ─────────────────────────────────────────────────────────
