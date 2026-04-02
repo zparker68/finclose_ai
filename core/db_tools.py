@@ -14,12 +14,84 @@ import sqlite3
 import hashlib
 import json
 import os
-from typing import Any
+from typing import Any, Optional
+
+from pydantic import BaseModel, field_validator
 
 DB_PATH = os.environ.get(
     "FINCLOSE_DB",
     os.path.join(os.path.dirname(__file__), "../finclose_data_gen/finclose.db")
 )
+
+
+# ── Return type contracts ─────────────────────────────────────────────────────
+# Pydantic models validate the shape of every tool result at the DB boundary.
+# If an Oracle column is renamed or a field goes missing, validation raises
+# immediately here — not silently downstream in an agent prompt.
+
+class ToolResult(BaseModel):
+    """Base for all tool return types."""
+    source: str
+    records: list[dict]
+
+class GLResult(ToolResult):
+    endpoint: str
+    period: str
+    record_count: int
+    data_hash: str
+
+class AnomalyResult(ToolResult):
+    period: str
+    anomaly_count: int
+    data_hash: str
+
+class UnbalancedResult(ToolResult):
+    period: str
+    unbalanced_count: int
+    data_hash: str
+
+class TrialBalanceResult(ToolResult):
+    period: str
+    account_count: int
+    data_hash: str
+
+class ReconResult(ToolResult):
+    endpoint: str
+    period: str
+    record_count: int
+    total_unexplained_difference: float
+    data_hash: str
+
+class ReconItemResult(ToolResult):
+    recon_id: str
+    item_count: int
+
+class APResult(ToolResult):
+    period: str
+    record_count: int
+    total_open_payables: float
+
+class ARResult(ToolResult):
+    period: str
+    record_count: int
+    aging_summary: list[dict]
+
+class AccrualResult(ToolResult):
+    period: str
+    total_accrual_amount: float
+    pending_count: int
+
+class VarianceResult(ToolResult):
+    period: str
+    record_count: int
+    threshold_breaches: int
+    data_hash: str
+
+class PolicyResult(ToolResult):
+    record_count: int
+
+class COAResult(ToolResult):
+    pass
 
 
 def _conn() -> sqlite3.Connection:
@@ -66,14 +138,14 @@ def get_gl_transactions(period: str, account_code: str | None = None,
                 (period, limit)
             ).fetchall()
         data = _rows_to_dicts(rows)
-    return {
-        "source": "Oracle Fusion GL",
-        "endpoint": f"/api/oracle/gl?period={period}",
-        "period": period,
-        "record_count": len(data),
-        "data_hash": _hash(data),
-        "records": data,
-    }
+    return GLResult(
+        source="Oracle Fusion GL",
+        endpoint=f"/api/oracle/gl?period={period}",
+        period=period,
+        record_count=len(data),
+        data_hash=_hash(data),
+        records=data,
+    ).model_dump()
 
 
 def get_anomalous_entries(period: str) -> dict:
@@ -89,13 +161,13 @@ def get_anomalous_entries(period: str) -> dict:
             (period,)
         ).fetchall()
         data = _rows_to_dicts(rows)
-    return {
-        "source": "Oracle Fusion GL — Anomaly Scan",
-        "period": period,
-        "anomaly_count": len(data),
-        "data_hash": _hash(data),
-        "records": data,
-    }
+    return AnomalyResult(
+        source="Oracle Fusion GL — Anomaly Scan",
+        period=period,
+        anomaly_count=len(data),
+        data_hash=_hash(data),
+        records=data,
+    ).model_dump()
 
 
 def get_gl_by_anomaly_type(period: str, anomaly_type: str) -> dict:
@@ -115,14 +187,14 @@ def get_gl_by_anomaly_type(period: str, anomaly_type: str) -> dict:
             (period, anomaly_type)
         ).fetchall()
         data = _rows_to_dicts(rows)
-    return {
-        "source": "Oracle Fusion GL",
-        "period": period,
-        "anomaly_type": anomaly_type,
-        "record_count": len(data),
-        "data_hash": _hash(data),
-        "records": data,
-    }
+    return GLResult(
+        source="Oracle Fusion GL",
+        endpoint=f"/api/oracle/gl?period={period}&anomaly_type={anomaly_type}",
+        period=period,
+        record_count=len(data),
+        data_hash=_hash(data),
+        records=data,
+    ).model_dump()
 
 
 def get_unbalanced_entries(period: str) -> dict:
@@ -144,13 +216,13 @@ def get_unbalanced_entries(period: str) -> dict:
             (period,)
         ).fetchall()
         data = _rows_to_dicts(rows)
-    return {
-        "source": "Oracle Fusion GL — Balance Validation",
-        "period": period,
-        "unbalanced_count": len(data),
-        "data_hash": _hash(data),
-        "records": data,
-    }
+    return UnbalancedResult(
+        source="Oracle Fusion GL — Balance Validation",
+        period=period,
+        unbalanced_count=len(data),
+        data_hash=_hash(data),
+        records=data,
+    ).model_dump()
 
 
 # ── Trial Balance ─────────────────────────────────────────────────────────────
@@ -168,13 +240,13 @@ def get_trial_balance(period: str) -> dict:
             (period,)
         ).fetchall()
         data = _rows_to_dicts(rows)
-    return {
-        "source": "Oracle Fusion GL — Trial Balance",
-        "period": period,
-        "account_count": len(data),
-        "data_hash": _hash(data),
-        "records": data,
-    }
+    return TrialBalanceResult(
+        source="Oracle Fusion GL — Trial Balance",
+        period=period,
+        account_count=len(data),
+        data_hash=_hash(data),
+        records=data,
+    ).model_dump()
 
 
 # ── Blackline Reconciliations ─────────────────────────────────────────────────
@@ -203,15 +275,15 @@ def get_reconciliations(period: str, status: str | None = None) -> dict:
             ).fetchall()
         data = _rows_to_dicts(rows)
     total_diff = sum(abs(r["difference"]) for r in data)
-    return {
-        "source": "Blackline",
-        "endpoint": f"/api/blackline/recons?period={period}",
-        "period": period,
-        "record_count": len(data),
-        "total_unexplained_difference": round(total_diff, 2),
-        "data_hash": _hash(data),
-        "records": data,
-    }
+    return ReconResult(
+        source="Blackline",
+        endpoint=f"/api/blackline/recons?period={period}",
+        period=period,
+        record_count=len(data),
+        total_unexplained_difference=round(total_diff, 2),
+        data_hash=_hash(data),
+        records=data,
+    ).model_dump()
 
 
 def get_recon_items(recon_id: str) -> dict:
@@ -225,12 +297,12 @@ def get_recon_items(recon_id: str) -> dict:
             (recon_id,)
         ).fetchall()
         data = _rows_to_dicts(rows)
-    return {
-        "source": "Blackline — Rec Items",
-        "recon_id": recon_id,
-        "item_count": len(data),
-        "records": data,
-    }
+    return ReconItemResult(
+        source="Blackline — Rec Items",
+        recon_id=recon_id,
+        item_count=len(data),
+        records=data,
+    ).model_dump()
 
 
 # ── Oracle AP ─────────────────────────────────────────────────────────────────
@@ -258,13 +330,13 @@ def get_ap_invoices(period: str, status: str | None = None) -> dict:
             ).fetchall()
         data = _rows_to_dicts(rows)
     total_open = sum(r["open_amount"] for r in data)
-    return {
-        "source": "Oracle Fusion AP",
-        "period": period,
-        "record_count": len(data),
-        "total_open_payables": round(total_open, 2),
-        "records": data,
-    }
+    return APResult(
+        source="Oracle Fusion AP",
+        period=period,
+        record_count=len(data),
+        total_open_payables=round(total_open, 2),
+        records=data,
+    ).model_dump()
 
 
 # ── Oracle AR ─────────────────────────────────────────────────────────────────
@@ -295,13 +367,13 @@ def get_ar_aging(period: str) -> dict:
         ).fetchall()
         aging_summary = _rows_to_dicts(summary)
 
-    return {
-        "source": "Oracle Fusion AR",
-        "period": period,
-        "record_count": len(data),
-        "aging_summary": aging_summary,
-        "records": data,
-    }
+    return ARResult(
+        source="Oracle Fusion AR",
+        period=period,
+        record_count=len(data),
+        aging_summary=aging_summary,
+        records=data,
+    ).model_dump()
 
 
 # ── Accruals ──────────────────────────────────────────────────────────────────
@@ -320,13 +392,13 @@ def get_accruals(period: str) -> dict:
         data = _rows_to_dicts(rows)
     total = sum(r["amount"] for r in data)
     pending = [r for r in data if r["status"] != "Posted"]
-    return {
-        "source": "Oracle Fusion GL — Accruals",
-        "period": period,
-        "total_accrual_amount": round(total, 2),
-        "pending_count": len(pending),
-        "records": data,
-    }
+    return AccrualResult(
+        source="Oracle Fusion GL — Accruals",
+        period=period,
+        total_accrual_amount=round(total, 2),
+        pending_count=len(pending),
+        records=data,
+    ).model_dump()
 
 
 # ── Variance Analysis ─────────────────────────────────────────────────────────
@@ -353,14 +425,14 @@ def get_variance_analysis(period: str, threshold_only: bool = False) -> dict:
                 (period,)
             ).fetchall()
         data = _rows_to_dicts(rows)
-    return {
-        "source": "Oracle Fusion GL / Hyperion HFM",
-        "period": period,
-        "record_count": len(data),
-        "threshold_breaches": sum(1 for r in data if r.get("threshold_breached")),
-        "data_hash": _hash(data),
-        "records": data,
-    }
+    return VarianceResult(
+        source="Oracle Fusion GL / Hyperion HFM",
+        period=period,
+        record_count=len(data),
+        threshold_breaches=sum(1 for r in data if r.get("threshold_breached")),
+        data_hash=_hash(data),
+        records=data,
+    ).model_dump()
 
 
 # ── Policy / RAG Knowledge Base ───────────────────────────────────────────────
@@ -378,11 +450,11 @@ def get_policy_documents(category: str | None = None) -> dict:
                 "SELECT doc_id, title, category, content FROM policy_documents"
             ).fetchall()
         data = _rows_to_dicts(rows)
-    return {
-        "source": "Internal Policy Library",
-        "record_count": len(data),
-        "records": data,
-    }
+    return PolicyResult(
+        source="Internal Policy Library",
+        record_count=len(data),
+        records=data,
+    ).model_dump()
 
 
 def get_chart_of_accounts() -> dict:
@@ -392,4 +464,4 @@ def get_chart_of_accounts() -> dict:
             "SELECT * FROM chart_of_accounts ORDER BY account_code"
         ).fetchall()
         data = _rows_to_dicts(rows)
-    return {"source": "Oracle Fusion COA", "records": data}
+    return COAResult(source="Oracle Fusion COA", records=data).model_dump()

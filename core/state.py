@@ -54,15 +54,16 @@ class AuditEntry:
     Satisfies SOX Section 302/404 documentation requirements:
     every decision is timestamped, attributed, and reasoned.
     """
-    timestamp:   str
-    agent:       str
-    action:      str
-    input_hash:  str        # SHA-256 of inputs — tamper detection
-    reasoning:   str
-    output:      str
-    sox_flags:   list[str]  = field(default_factory=list)
-    citations:   list[str]  = field(default_factory=list)
-    confidence:  float      = 1.0
+    timestamp:      str
+    agent:          str
+    action:         str
+    input_hash:     str        # SHA-256 of inputs — tamper detection
+    reasoning:      str
+    output:         str
+    sox_flags:      list[str]  = field(default_factory=list)
+    citations:      list[str]  = field(default_factory=list)
+    confidence:     float      = 1.0
+    prompt_version: str        = ""   # version of system prompt in use — for audit reproducibility
 
 
 # ── Central State Schema ──────────────────────────────────────────────────────

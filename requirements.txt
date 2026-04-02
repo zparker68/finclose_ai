@@ -18,6 +18,9 @@ sentence-transformers>=3.0.0 # all-MiniLM-L6-v2 for embeddings (~80MB)
 # API Layer (enterprise system simulation)
 fastapi>=0.115.0
 uvicorn>=0.30.0
+python-jose[cryptography]>=3.3.0  # JWT signing
+bcrypt>=4.0.0                     # password hashing
+python-multipart>=0.0.9           # form data (OAuth2 login form)
 
 # UI
 streamlit>=1.38.0

@@ -39,6 +39,7 @@ from langchain_ollama import ChatOllama
 
 from core.state import AgentState, AgentRole, AuditEntry, SoxFlag, TaskType
 from core import db_tools
+from core.prompts import get_prompt, get_version
 
 # ── LLM Setup ─────────────────────────────────────────────────────────────────
 # Uses Ollama running locally — zero data leaves the machine.
@@ -61,7 +62,8 @@ def _audit(agent: str, action: str, inputs: dict,
            reasoning: str, output: str,
            sox_flags: list[str] | None = None,
            citations: list[str] | None = None,
-           confidence: float = 1.0) -> AuditEntry:
+           confidence: float = 1.0,
+           prompt_version: str = "") -> AuditEntry:
     return AuditEntry(
         timestamp=datetime.now(timezone.utc).isoformat(),
         agent=agent,
@@ -72,6 +74,7 @@ def _audit(agent: str, action: str, inputs: dict,
         sox_flags=sox_flags or [],
         citations=citations or [],
         confidence=confidence,
+        prompt_version=prompt_version,
     )
 
 
@@ -79,32 +82,7 @@ def _audit(agent: str, action: str, inputs: dict,
 # AGENT 1 — PLANNER
 # ═══════════════════════════════════════════════════════════════════════════════
 
-PLANNER_SYSTEM = """You are the Planner Agent for FinClose AI, an enterprise accounting automation system.
-
-Your job is to:
-1. Classify the user's accounting task into one of these types:
-   - reconciliation: account reconciliation, balance matching, sub-ledger tie-out
-   - journal_entry: create, review, or validate journal entries
-   - variance_analysis: budget vs actual, period-over-period comparison, expense analysis
-   - anomaly_detection: flag unusual entries, SOX control violations, fraud indicators
-   - accrual_review: review, validate, or generate accrual schedules
-   - close_checklist: month-end close status, checklist progress
-   - general_query: anything else
-
-2. Write a step-by-step execution plan (3-5 steps) for the Executor agent.
-
-3. List the database tables needed:
-   Available tables: gl_transactions, trial_balance, reconciliations, recon_items,
-   ap_invoices, ar_aging, accruals, variance_analysis, chart_of_accounts, policy_documents
-
-Respond ONLY with valid JSON, exactly this structure:
-{
-  "task_type": "<type>",
-  "routing_reason": "<one sentence explaining why>",
-  "task_plan": ["step 1", "step 2", "step 3"],
-  "relevant_tables": ["table1", "table2"],
-  "policy_category": "<Financial Close|Revenue|null>"
-}"""
+PLANNER_SYSTEM = get_prompt("planner")
 
 
 def planner_agent(state: AgentState) -> AgentState:
@@ -157,6 +135,7 @@ Classify and plan this accounting task."""
         reasoning=state.routing_reason,
         output=f"Task: {state.task_type.value} | Steps: {len(state.task_plan)}",
         confidence=0.95,
+        prompt_version=get_version("planner"),
     ))
 
     state.processing_ms += (time.time() - t0) * 1000
@@ -275,26 +254,7 @@ def retriever_agent(state: AgentState) -> AgentState:
 # AGENT 3 — EXECUTOR
 # ═══════════════════════════════════════════════════════════════════════════════
 
-EXECUTOR_SYSTEM = """You are the Executor Agent for FinClose AI, an enterprise accounting automation system used by the Global Accounting team.
-
-You perform financial close tasks with the precision of a Big 4 accountant and the analytical depth of a CFO.
-
-Your responsibilities:
-- Reconciliation: Identify and explain balance differences, categorize items by aging, recommend resolution
-- Journal Entries: Generate properly formatted, balanced debit/credit entries with business purpose
-- Variance Analysis: Quantify and explain budget vs. actual differences, flag threshold breaches (>10%), write CFO-ready narratives
-- Anomaly Detection: Identify SOX control violations, unusual patterns, fraud indicators
-- Accrual Review: Validate completeness, accuracy, and proper reversal setup
-
-FORMATTING RULES:
-- Be precise and quantitative — always cite specific dollar amounts
-- Journal entries must always balance (total debits = total credits)
-- Flag any SOX concerns with prefix [SOX FLAG]
-- Reference policy documents when applicable: cite as [POL-XXX]
-- Structure output with clear sections: SUMMARY | FINDINGS | RECOMMENDATIONS | JOURNAL ENTRIES (if applicable)
-- Write as if this will be reviewed by external auditors
-
-IMPORTANT: Base your analysis ONLY on the data provided. Never fabricate numbers."""
+EXECUTOR_SYSTEM = get_prompt("executor")
 
 
 def _build_executor_prompt(state: AgentState) -> str:
@@ -357,6 +317,7 @@ def executor_agent(state: AgentState) -> AgentState:
         reasoning=f"Executed {state.task_type.value} analysis using {len(state.retrieved_data)} datasets",
         output=analysis[:500] + "..." if len(analysis) > 500 else analysis,
         confidence=0.88,
+        prompt_version=get_version("executor"),
     ))
 
     state.processing_ms += (time.time() - t0) * 1000
@@ -386,42 +347,7 @@ def _extract_journal_entries(text: str) -> list[dict]:
 # AGENT 4 — CRITIC (SOX Review + Confidence Scoring)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-CRITIC_SYSTEM = """You are the Critic Agent for FinClose AI — the final SOX compliance and quality gate.
-
-Your role is to independently review the Executor's analysis and:
-
-1. SOX CONTROL REVIEW — Check for:
-   - Self-approval (same preparer and approver) → [SOX: SELF_APPROVAL]
-   - Missing approver on manual entries → [SOX: MISSING_APPROVER]
-   - Unbalanced journal entries (debits ≠ credits) → [SOX: UNBALANCED_ENTRY]
-   - Weekend/holiday postings without approval → [SOX: WEEKEND_POSTING]
-   - Prior period adjustments → [SOX: PRIOR_PERIOD_POSTING]
-   - Round-number manual entries over $50K → [SOX: ROUND_NUMBER_MANUAL]
-   - Approval threshold violations (per policy POL-001) → [SOX: THRESHOLD_BREACH]
-
-2. ACCURACY REVIEW — Verify:
-   - All dollar amounts cited match the source data
-   - Journal entries balance (total debits = total credits)
-   - Account codes are valid and pairings make sense
-   - Percentages are mathematically correct
-
-3. COMPLETENESS REVIEW — Check:
-   - All material variances (>10%) have explanations
-   - All reconciling differences >$50K are escalated
-   - Policy citations are accurate
-
-4. VERDICT — Issue one of:
-   - APPROVED: Analysis is accurate, complete, and SOX-compliant
-   - FLAGGED: Analysis is usable but has issues requiring management attention
-   - REJECTED: Material errors or SOX violations requiring rework
-
-Respond with:
-VERDICT: [APPROVED|FLAGGED|REJECTED]
-CONFIDENCE: [0.0-1.0]
-SOX_FLAGS: [comma-separated list of flag codes, or NONE]
-ISSUES: [bullet list of specific issues found, or "None identified"]
-CITATIONS: [list of policy/data sources that support the review]
-SUMMARY: [2-3 sentence summary of the review findings]"""
+CRITIC_SYSTEM = get_prompt("critic")
 
 
 # ── Numeric Claim Verifier ────────────────────────────────────────────────────
@@ -453,7 +379,7 @@ _NUMERIC_FIELDS = {
 
 def _extract_dollar_claims(text: str) -> list[tuple[str, float]]:
     """Return (raw_string, normalized_float) for every dollar amount in text.
-    Handles $285,000 · 285,000 · 974654.96 (raw float from Mistral tables)."""
+    Handles $285,000 / 285,000 / 974654.96 (raw float from Mistral tables)."""
     results = []
     for m in _DOLLAR_RE.finditer(text):
         raw = m.group(0).strip()
@@ -479,7 +405,7 @@ def _extract_dollar_claims(text: str) -> list[tuple[str, float]]:
 
 def _flatten_data_values(retrieved_data: dict) -> list[float]:
     """
-    Harvest all numeric ground-truth values from the pipeline's retrieved data.
+    Harvest all numeric ground-truth values from the pipeline retrieved data.
     Checks both dataset-level summary fields and per-record fields.
     """
     values: list[float] = []
@@ -830,6 +756,7 @@ Pay particular attention to any MISMATCH or SUSPICIOUS numeric claims above."""
         sox_flags=[f.value for f in state.sox_flags],
         citations=state.citations,
         confidence=confidence,
+        prompt_version=get_version("critic"),
     ))
 
     state.processing_ms += (time.time() - t0) * 1000

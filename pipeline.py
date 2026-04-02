@@ -24,6 +24,7 @@ Usage:
 
 from __future__ import annotations
 
+import sqlite3
 import uuid
 import time
 import json
@@ -38,6 +39,21 @@ from langchain_core.messages import HumanMessage
 
 from core.state import AgentState, TaskType
 from agents.agents import planner_agent, retriever_agent, executor_agent, critic_agent
+
+# ── Checkpointer setup ────────────────────────────────────────────────────────
+# SqliteSaver persists pipeline state so sessions survive server restarts.
+# To upgrade to Postgres: swap SqliteSaver for PostgresSaver and point at your DB.
+# The API is identical — one line change.
+
+_CHECKPOINT_DB = os.path.join(os.path.dirname(__file__), "checkpoints.db")
+
+def _get_checkpointer():
+    try:
+        from langgraph.checkpoint.sqlite import SqliteSaver
+        conn = sqlite3.connect(_CHECKPOINT_DB, check_same_thread=False)
+        return SqliteSaver(conn)
+    except Exception:
+        return None  # Degrade gracefully if checkpointer unavailable
 
 
 # ── Graph definition ──────────────────────────────────────────────────────────
@@ -83,7 +99,8 @@ def _build_graph():
     graph.add_edge("executor",  "critic")
     graph.add_edge("critic",    END)
 
-    return graph.compile()
+    checkpointer = _get_checkpointer()
+    return graph.compile(checkpointer=checkpointer)
 
 
 # Compiled graph — module-level singleton
@@ -130,7 +147,8 @@ def run_pipeline(
     )
 
     graph = _get_graph()
-    result = graph.invoke({"state": initial_state})
+    config = {"configurable": {"thread_id": initial_state.session_id}}
+    result = graph.invoke({"state": initial_state}, config=config)
     final_state: AgentState = result["state"]
     final_state.processing_ms = (time.time() - t0) * 1000
 
