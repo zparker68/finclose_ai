@@ -16,6 +16,7 @@
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![LangGraph](https://img.shields.io/badge/LangGraph-0.2-FF6B35?style=flat-square)](https://langchain-ai.github.io/langgraph/)
 [![Ollama](https://img.shields.io/badge/Ollama-Local_LLM-black?style=flat-square)](https://ollama.com)
+[![FastAPI](https://img.shields.io/badge/FastAPI-REST_API-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![SQLite](https://img.shields.io/badge/Oracle_GL-Simulated-003B57?style=flat-square&logo=sqlite)](https://sqlite.org)
 [![SOX](https://img.shields.io/badge/SOX-Compliant_Audit_Trail-2ECC71?style=flat-square)]()
 [![Offline](https://img.shields.io/badge/Data-100%25_Offline-E74C3C?style=flat-square)]()
@@ -109,10 +110,18 @@ This is not a demo. It is a functioning accounting automation engine backed by r
   │                                                                        │
   │   ┌──────────────────┐  ┌─────────────────┐  ┌─────────────────────┐ │
   │   │  Analysis Report │  │  SOX Audit Log  │  │  Streamlit UI       │ │
-  │   │  APPROVED ✅     │  │  JSON export    │  │  Confidence bars    │ │
+  │   │  APPROVED ✅     │  │  JSON + PBC     │  │  Confidence bars    │ │
   │   │  FLAGGED  ⚠️     │  │  SHA-256 hashes │  │  Drill-down cards   │ │
-  │   │  REJECTED ❌     │  │  Attribution    │  │  Plotly charts      │ │
+  │   │  REJECTED ❌     │  │  Prompt version │  │  Plotly charts      │ │
   │   └──────────────────┘  └─────────────────┘  └─────────────────────┘ │
+  │                                                                        │
+  │   ┌────────────────────────────────────────────────────────────────┐  │
+  │   │  FastAPI REST Layer  (api/server.py)                           │  │
+  │   │  JWT Auth · RBAC (admin/analyst) · Correlation IDs (X-Req-ID)  │  │
+  │   │  POST /run   GET /demo/{task}   GET /audit/{id}/export/pbc     │  │
+  │   │  GET /metrics/dashboard   GET /audit/requests                  │  │
+  │   │  Per-request audit log written to audit_requests.jsonl         │  │
+  │   └────────────────────────────────────────────────────────────────┘  │
   └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -360,15 +369,16 @@ Every agent action generates an immutable audit entry. This is what makes the sy
 └─────────────────────────────────────────────────────────────────────────────┘
 
   {
-    "timestamp":   "2024-12-31T18:42:07.441+00:00",    ← UTC, always
-    "agent":       "executor",                          ← attribution
-    "action":      "execute_variance_analysis",         ← what happened
-    "input_hash":  "a3f8c2d19e4b",                     ← SHA-256 of inputs
-    "reasoning":   "Executed variance analysis using 2 datasets",
-    "output":      "4 accounts exceed 10% threshold...",
-    "sox_flags":   ["THRESHOLD_BREACH"],                ← compliance signals
-    "citations":   ["Oracle/HFM Variance | 4 threshold breaches"],
-    "confidence":  0.88
+    "timestamp":      "2024-12-31T18:42:07.441+00:00",   ← UTC, always
+    "agent":          "executor",                         ← attribution
+    "action":         "execute_variance_analysis",        ← what happened
+    "input_hash":     "a3f8c2d19e4b",                    ← SHA-256 of inputs
+    "reasoning":      "Executed variance analysis using 2 datasets",
+    "output":         "4 accounts exceed 10% threshold...",
+    "sox_flags":      ["THRESHOLD_BREACH"],               ← compliance signals
+    "citations":      ["Oracle/HFM Variance | 4 threshold breaches"],
+    "confidence":     0.88,
+    "prompt_version": "1.0.0"                            ← versioned prompt registry
   }
 
   ┌──────────────────────────────────────────────────────────┐
@@ -379,7 +389,12 @@ Every agent action generates an immutable audit entry. This is what makes the sy
   │  ✅  Agent attribution — who did what, when             │
   │  ✅  Policy citations — every finding references source  │
   │  ✅  SOX flags propagate — Planner→Executor→Critic      │
-  │  ✅  JSON exportable — ready for external audit PBC     │
+  │  ✅  Prompt versioning — records which version of the   │
+  │       system prompt was in effect for each decision     │
+  │  ✅  PBC export — /audit/{id}/export/pbc formats the    │
+  │       log as an auditor Provided-by-Client list         │
+  │  ✅  Persistent sessions — SQLite checkpointer survives │
+  │       restarts (Postgres-ready, one-line swap)          │
   │  ✅  Session ID — links all entries to one workflow run  │
   └──────────────────────────────────────────────────────────┘
 
@@ -537,6 +552,44 @@ The dataset contains 11 intentionally injected SOX control violations across the
 
   Append-only log      Audit entries are never modified or deleted.
                        Designed for external audit PBC list readiness.
+
+  Prompt versioning    All system prompts stored in core/prompts.py with
+                       semantic version numbers. Version recorded in every
+                       AuditEntry — past audits are reproducible against
+                       the exact instructions that were in effect.
+
+  API LAYER
+  ─────────
+  FastAPI + uvicorn    Full REST API exposing the pipeline over HTTP.
+                       Async endpoints — Ollama calls run in a thread pool
+                       so the event loop stays free.
+
+  JWT Authentication   OAuth2PasswordBearer + HS256 signed tokens.
+                       Two roles: admin (pipeline execution) and analyst
+                       (read-only). Server-side token denylist for logout.
+
+  RBAC                 Role-based access on every endpoint. /run and /demo
+                       require admin. /sessions and /audit require analyst+.
+                       /health and / are public for monitoring probes.
+
+  Request audit log    Every API call logged with user, endpoint, status,
+                       duration, client IP, and X-Request-ID correlation
+                       header. Written to audit_requests.jsonl on disk.
+                       SOX-relevant: proves every action on financial data
+                       is attributable to an authenticated, named user.
+
+  PBC export           GET /audit/{session_id}/export/pbc formats the full
+                       pipeline audit trail as a numbered Provided-by-Client
+                       list — the standard format external auditors request
+                       during audit season. Reduces manual prep labor.
+
+  Session persistence  SQLite checkpointer (langgraph.checkpoint.sqlite)
+                       persists pipeline state across server restarts.
+                       Upgrade path to PostgresSaver is one import swap.
+
+  Metrics endpoints    GET /metrics/summary — aggregate performance stats
+                       GET /metrics/dashboard — time-series data for charts
+                       Both admin-only, ready for Plotly or Grafana.
 ```
 
 ---
@@ -545,27 +598,40 @@ The dataset contains 11 intentionally injected SOX control violations across the
 
 ```
 finclose_ai/
-├── pipeline.py                 LangGraph graph + run_pipeline() entry point
+├── pipeline.py                 LangGraph graph + run_pipeline() + SQLite checkpointer
 ├── requirements.txt
 │
 ├── core/
 │   ├── state.py                AgentState dataclass + enums (SoxFlag, TaskType)
-│   │                           Includes confidence_breakdown and numeric_verification fields
-│   └── db_tools.py             Enterprise data tool layer (Oracle/Blackline API sim)
-│                               get_gl_by_anomaly_type() for SOX flag drill-downs
+│   │                           AuditEntry includes prompt_version for SOX reproducibility
+│   ├── db_tools.py             Enterprise data tool layer with Pydantic return models
+│   │                           Schema validation at DB boundary — catches Oracle column drift
+│   └── prompts.py              Versioned prompt registry (planner/executor/critic @ 1.0.0)
+│                               Bump version here when prompts change — recorded in audit log
 │
 ├── agents/
 │   └── agents.py               All 4 agents + numeric claim verifier
 │                               _verify_numeric_claims() · _compute_confidence_breakdown()
 │
+├── api/
+│   ├── server.py               FastAPI REST layer — all endpoints with RBAC
+│   │                           POST /run  GET /demo/{task}  GET /health
+│   │                           GET /audit/{id}  GET /audit/{id}/export/pbc
+│   │                           GET /audit/requests  GET /sessions
+│   │                           GET /metrics/summary  GET /metrics/dashboard
+│   ├── auth.py                 JWT auth — login/logout, two roles (admin/analyst)
+│   │                           bcrypt passwords · token denylist · /auth/me
+│   └── middleware.py           Correlation IDs (X-Request-ID) + request audit logging
+│                               Every API call logged to audit_requests.jsonl
+│
 ├── ui/
 │   └── app.py                  Streamlit dashboard
 │                               Dark theme · Plotly charts · 5-dim confidence bars
 │                               SOX flag memo cards · Claim verifier badge
-│                               Markdown table rendering · SOX HTML report export
 │
 ├── monitoring/
 │   └── metrics.py              JSONL metrics tracker (latency, confidence, verdicts)
+│                               get_dashboard_data() feeds /metrics/dashboard endpoint
 │
 └── finclose_data_gen/
     ├── generate_mock_data.py   Data generation script (run once to create DB)
@@ -609,12 +675,54 @@ python finclose_data_gen/generate_mock_data.py
 # Terminal 1 — keep Ollama running
 ollama serve
 
-# Streamlit dashboard (primary interface)
+# Streamlit dashboard (primary visual interface)
 streamlit run ui/app.py
+
+# FastAPI REST layer + Swagger UI
+cd finclose_ai && source venv/bin/activate
+uvicorn api.server:app --reload --port 8000
+# Swagger UI → http://localhost:8000/docs
+# Accounts: admin / finclose2024  |  analyst / analyst2024 (read-only)
 
 # CLI demo (interactive — pick from 5 task types)
 python pipeline.py
 ```
+
+### API Quick Start
+
+```bash
+# Login — get a Bearer token
+curl -X POST http://localhost:8000/auth/login \
+  -d "username=admin&password=finclose2024" \
+  -H "Content-Type: application/x-www-form-urlencoded"
+
+# Health check (no auth required)
+curl http://localhost:8000/health
+
+# Run a preset demo task
+curl -H "Authorization: Bearer <token>" \
+  "http://localhost:8000/demo/sox_scan"
+
+# Export audit trail as a PBC list (Provided by Client — auditor format)
+curl -H "Authorization: Bearer <token>" \
+  "http://localhost:8000/audit/<session_id>/export/pbc"
+
+# Aggregate performance metrics
+curl -H "Authorization: Bearer <token>" \
+  "http://localhost:8000/metrics/summary"
+```
+
+### LangSmith Telemetry (Optional)
+
+Add to `.env` to enable real-time agent trace visualization:
+
+```bash
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_API_KEY=your-key-from-smith.langchain.com
+LANGCHAIN_PROJECT=finclose-ai
+```
+
+Once enabled, every pipeline run appears in LangSmith with full agent reasoning paths — useful for demonstrating explainability to non-technical stakeholders.
 
 ### Swap the LLM
 
